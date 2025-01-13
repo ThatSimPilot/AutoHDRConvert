@@ -1,8 +1,11 @@
 # Auto HDR-SDR Converter
 
 Auto HDR-SDR Converter is a simple, lightweight application I developed to solve my issue of taking screenshots when using HDR. The desire for this app came as a solution to HDR files not being recognised by Volanta, and the repetitive and troublesome process of manually converting these files into a recognisable format.
+
 Although developed for Flight Simulator screenshots taken with NVIDIA, the app works with any .jxr images taken from any game.
+
 The application automatically scans a selected directory for HDR screenshots (.jxr) and converts them to SDR format (.jpg), optionally deleting the orignal after conversion.
+
 Due to a lack of support with .jxr in the Python language, an external app is used for the image conversion. HDRFix was developped by Brooke Vibber and more information surrounding this can be found in the repository - https://github.com/bvibber/hdrfix
 
 ## Installation and Usage
