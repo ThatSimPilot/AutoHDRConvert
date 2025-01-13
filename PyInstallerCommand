@@ -1,0 +1,1 @@
+py -m PyInstaller --clean --onefile --windowed --add-data icon.png:. --add-data icon.ico:. --add-data hdrfix.exe:. --resource hdrfix.exe --icon icon.ico AutoHDRConvert.py
