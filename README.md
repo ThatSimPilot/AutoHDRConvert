@@ -20,6 +20,7 @@ To install the HDR-SDR Converter, simply follow the below steps.
 
 Further development will be limited due to time and workload constraints, however I will try to implement the following when I get a chance:
 * Option to adjust HDRFix settings and parameters
+
 Additionally, any suggestions, requests or issues can be left by submitting a pull request and I will try and look at implementing.
 
 ## Credits - HDRFix
