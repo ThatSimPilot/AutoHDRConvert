@@ -8,6 +8,8 @@ The application automatically scans a selected directory for HDR screenshots (.j
 
 Due to a lack of support with .jxr in the Python language, an external app is used for the image conversion. HDRFix was developped by Brooke Vibber and more information surrounding this can be found in the repository - https://github.com/bvibber/hdrfix
 
+<a href="https://www.buymeacoffee.com/thatsimpilot" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+
 ## Installation and Usage
 
 To install the HDR-SDR Converter, simply follow the below steps.
