@@ -1,4 +1,3 @@
 watchdog
-Pillow
-pystray
 send2trash
+PySide6-Essentials
