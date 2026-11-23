@@ -4,26 +4,67 @@ Auto HDR-SDR Converter is a simple, lightweight application I developed to solve
 
 Although developed for Flight Simulator screenshots taken with NVIDIA, the app works with any .jxr images taken from any game.
 
-The application automatically scans a selected directory for HDR screenshots (.jxr) and converts them to SDR format (.jpg), optionally deleting the orignal after conversion.
+The application watches a folder you choose for new HDR screenshots (.jxr) and converts them to SDR format (.jpg), optionally sending the original to the Recycle Bin after conversion.
 
-Due to a lack of support with .jxr in the Python language, an external app is used for the image conversion. HDRFix was developped by Brooke Vibber and more information surrounding this can be found in the repository - https://github.com/bvibber/hdrfix
+Due to a lack of support for .jxr in the Python language, an external tool is used for the image conversion. HDRFix was developed by Brooke Vibber and more information can be found in its repository - https://github.com/bvibber/hdrfix. HDRFix is bundled inside the app, so there is nothing extra to install.
 
 <a href="https://www.buymeacoffee.com/thatsimpilot" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
 
 ## Installation and Usage
 
-To install the HDR-SDR Converter, simply follow the below steps.
-1. Download the latest release from https://github.com/ThatSimPilot/Auto-HDR-SDR-Converter/releases
-2. Extract from the .zip and place the folder in a desired location (anywhere). AutoHDRConverter.exe and hdrfix.exe MUST be in the same folder.
-3. Run AutoHDRConverter.exe and select your desired input and output directories, and any other desired settings
-4. Hit Start and any new images/screenshots will automatically be converted.
+1. Download the latest release from https://github.com/ThatSimPilot/Auto-HDR-SDR-Converter/releases (use the installer, or extract the .zip anywhere you like).
+2. Run `AutoHDRConvert.exe`. It is self-contained, so no other files are needed.
+3. Choose your input folder (where your screenshots are saved) and your output folder, plus any other settings:
+   * **Delete Original Files** - once the JPG is confirmed to exist, the original .jxr is moved to the **Recycle Bin** (not permanently deleted). If anything goes wrong, the original is kept.
+   * **Minimize to Tray** - closing the window hides the app in the system tray. Double-click the tray icon to reopen it.
+   * **Output to Log** - writes a log file, handy for troubleshooting (see below).
+4. Hit **Start**. Any new screenshots will automatically be converted.
+
+### Good to know
+* Output files are named `<name>-sdr.jpg`. If that name already exists, a number is added (`-sdr-1.jpg`) instead of overwriting.
+* Only **new** .jxr files are converted. Files already in the folder when you press Start are left alone.
+* Only the top level of the input folder is watched, not its subfolders. `.jxr` is matched regardless of upper/lower case, and files renamed or moved into the folder are picked up.
+* Pressing **Start** while it is already running restarts the watcher and applies any settings you changed. Only one copy of the app can run at a time.
+* If a conversion fails, you will get a notification from the system tray.
+
+### Using a newer HDRFix (optional)
+The app looks for `hdrfix.exe` in this order: next to `AutoHDRConvert.exe`, then the copy bundled inside the app, then your PATH. To use a newer HDRFix, just drop its `hdrfix.exe` next to `AutoHDRConvert.exe`.
+
+## Where settings and logs live
+
+* Settings: `%APPDATA%\AutoHDRConvert\config.json`. Older versions kept `config.json` next to the exe; it is read once as a fallback.
+* Log (only when **Output to Log** is on): `%APPDATA%\AutoHDRConvert\AutoHDRConvert.log`. It rotates at about 1 MB, and no longer writes `z_log.txt` into your output folder.
+
+Paste `%APPDATA%\AutoHDRConvert` into the Windows Explorer address bar to jump there.
+
+## Troubleshooting
+
+* **Nothing is converting** - check the input folder is the one your game or screenshot tool saves to, and that the app says it is running (press Start). Remember that only new files are converted, not ones already in the folder.
+* **Some images fail** - turn on **Output to Log**, press Start again, and check the log file above for the error.
+* **Windows SmartScreen warns about the app** - the exe is not code-signed. Click **More info**, then **Run anyway**.
+
+## Building from source
+
+You will need Python on Windows.
+```
+pip install -r requirements-dev.txt
+pyinstaller AutoHDRConvert.spec
+```
+The built `AutoHDRConvert.exe` ends up in `dist`. The spec bundles `hdrfix.exe`, `icon.png` and `icon.ico` from the repository folder.
+
+To run the tests:
+```
+python -m unittest discover -s tests
+```
 
 ## Future Plans (Roadmap)
 
-Further development will be limited due to time and workload constraints, however I will try to implement the following when I get a chance:
+Further development will be limited due to time and workload constraints, but I will try to implement the following when I get a chance:
 * Option to adjust HDRFix settings and parameters
+* Modern UI refresh
+* Start with Windows / start minimised
 
-Additionally, any suggestions, requests or issues can be left by submitting a pull request and I will try and look at implementing.
+Any suggestions, requests or issues can be left by opening an issue or submitting a pull request, and I will try to take a look.
 
 ## Credits - HDRFix
 ### HDRFix

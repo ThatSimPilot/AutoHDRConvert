@@ -1,0 +1,4 @@
+watchdog
+Pillow
+pystray
+send2trash

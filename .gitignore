@@ -1,5 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
 
-AutoHDRConvert.zip
-PyInstallerCommand.txt
-InnoSetupScript.iss
-InnoInstaller Compile/AutoHDRConvert/
+# PyInstaller output
+build/
+dist/
+
+# Inno Setup output
+InnoInstaller Compile/
+
+# Release archives
+*.zip
+
+# Per-user config and logs (app stores these in %APPDATA%\AutoHDRConvert\)
+/config.json
+*.log
+z_log.txt
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Local tool output
+graphify-out/
+.serena/
