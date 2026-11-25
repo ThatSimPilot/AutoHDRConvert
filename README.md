@@ -1,51 +1,58 @@
 # Auto HDR-SDR Converter
 
-Auto HDR-SDR Converter is a simple, lightweight application I developed to solve my issue of taking screenshots when using HDR. The desire for this app came as a solution to HDR files not being recognised by Volanta, and the repetitive and troublesome process of manually converting these files into a recognisable format.
+I built Auto HDR-SDR Converter because HDR screenshots weren't being recognised by Volanta, and converting them by hand every time was a chore. It was made for Flight Simulator screenshots taken with NVIDIA, but it works with any `.jxr` image from any game.
 
-Although developed for Flight Simulator screenshots taken with NVIDIA, the app works with any .jxr images taken from any game.
-
-The application watches a folder you choose for new HDR screenshots (.jxr) and converts them to SDR format (.jpg), optionally sending the original to the Recycle Bin after conversion.
-
-Due to a lack of support for .jxr in the Python language, an external tool is used for the image conversion. HDRFix was developed by Brooke Vibber and more information can be found in its repository - https://github.com/bvibber/hdrfix. HDRFix is bundled inside the app, so there is nothing extra to install.
+Point it at a folder, and every new HDR screenshot (`.jxr`) is converted to an SDR `.jpg` for you. The conversion is done by HDRFix, which is bundled inside the app, so there is nothing extra to install. HDRFix was developed by Brooke Vibber: https://github.com/bvibber/hdrfix
 
 <a href="https://www.buymeacoffee.com/thatsimpilot" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
 
-## Installation and Usage
+## Install and use
 
-1. Download the latest release from https://github.com/ThatSimPilot/Auto-HDR-SDR-Converter/releases (use the installer, or extract the .zip anywhere you like).
-2. Run `AutoHDRConvert.exe`. It is self-contained, so no other files are needed.
-3. Choose your input folder (where your screenshots are saved) and your output folder, plus any other settings:
-   * **Delete Original Files** - once the JPG is confirmed to exist, the original .jxr is moved to the **Recycle Bin** (not permanently deleted). If anything goes wrong, the original is kept.
-   * **Minimize to Tray** - closing the window hides the app in the system tray. Double-click the tray icon to reopen it.
-   * **Output to Log** - writes a log file, handy for troubleshooting (see below).
-4. Hit **Start**. Any new screenshots will automatically be converted.
+1. Download the latest release from https://github.com/ThatSimPilot/Auto-HDR-SDR-Converter/releases.
+2. Run `AutoHDRConvert.exe`. No other files are needed.
+3. Pick the **Watch folder** (where your screenshots are saved) and the **Save JPGs to** folder (it defaults to the same folder as the originals). Under **After converting**, choose whether to keep the original or move it to the Recycle Bin.
+4. Press **Start**. New screenshots are converted as they arrive.
 
-### Good to know
-* Output files are named `<name>-sdr.jpg`. If that name already exists, a number is added (`-sdr-1.jpg`) instead of overwriting.
-* Only **new** .jxr files are converted. Files already in the folder when you press Start are left alone.
-* Only the top level of the input folder is watched, not its subfolders. `.jxr` is matched regardless of upper/lower case, and files renamed or moved into the folder are picked up.
-* Pressing **Start** while it is already running restarts the watcher and applies any settings you changed. Only one copy of the app can run at a time.
-* If a conversion fails, you will get a notification from the system tray.
+In **Settings** you can also choose:
+* **Tone preset**: Natural, Punchy or Bright (see below).
+* **When you close the window**: quit the app, or keep it running in the system tray.
+* **Notifications**: Failures only, All conversions, or Off.
+* **Start watching when the app opens**.
+* **Write a log file**, handy for troubleshooting.
+
+### Tone presets
+* **Natural**: the HDRFix defaults.
+* **Punchy**: ACES tone curve, with more contrast.
+* **Bright**: half a stop brighter.
+
+### How it behaves
+* Output files are named `<name>-sdr.jpg`. If that name is already taken, a number is added (`-sdr-1.jpg`) instead of overwriting.
+* Only **new** `.jxr` files are converted. Files already in the folder when watching starts are left alone.
+* Only the top level of the watch folder is watched, not its subfolders. `.jxr` is matched whatever the case, and files renamed or moved into the folder are picked up.
+* The original is moved to the Recycle Bin only after the JPG has been verified, and only for files on fixed local drives. Otherwise the original is kept, and the activity list says so.
+* Failures show in the recent activity list and, by default, as a notification.
+* Only one copy of the app runs at a time. Opening it again brings the open window forward.
+* If you chose to keep running in the tray, closing the window hides the app there. Single-click the tray icon to open the window again.
 
 ### Using a newer HDRFix (optional)
-The app looks for `hdrfix.exe` in this order: next to `AutoHDRConvert.exe`, then the copy bundled inside the app, then your PATH. To use a newer HDRFix, just drop its `hdrfix.exe` next to `AutoHDRConvert.exe`.
+The app looks for `hdrfix.exe` next to `AutoHDRConvert.exe` first, then the copy bundled inside the app, then your PATH. To use a newer HDRFix, drop its `hdrfix.exe` next to `AutoHDRConvert.exe`.
 
 ## Where settings and logs live
 
-* Settings: `%APPDATA%\AutoHDRConvert\config.json`. Older versions kept `config.json` next to the exe; it is read once as a fallback.
-* Log (only when **Output to Log** is on): `%APPDATA%\AutoHDRConvert\AutoHDRConvert.log`. It rotates at about 1 MB, and no longer writes `z_log.txt` into your output folder.
+* Settings: `%APPDATA%\AutoHDRConvert\config.json`. If that file doesn't exist yet, a `config.json` beside the exe (from older versions) is read instead.
+* Log (only when **Write a log file** is on): `%APPDATA%\AutoHDRConvert\AutoHDRConvert.log`. It rotates at about 1 MB and keeps one older copy.
 
 Paste `%APPDATA%\AutoHDRConvert` into the Windows Explorer address bar to jump there.
 
 ## Troubleshooting
 
-* **Nothing is converting** - check the input folder is the one your game or screenshot tool saves to, and that the app says it is running (press Start). Remember that only new files are converted, not ones already in the folder.
-* **Some images fail** - turn on **Output to Log**, press Start again, and check the log file above for the error.
-* **Windows SmartScreen warns about the app** - the exe is not code-signed. Click **More info**, then **Run anyway**.
+* **Nothing is converting**: check the Watch folder is the one your screenshot tool saves to, and that the status says Watching. Only new files are converted, so files already in the folder won't be picked up.
+* **Some images fail**: turn on **Write a log file** in Settings, try again, and check the failed row in the activity list. The log has the details.
+* **Windows SmartScreen warns about the app**: the exe is unsigned. Click **More info**, then **Run anyway**.
 
 ## Building from source
 
-You will need Python on Windows.
+You will need Python on Windows. The build needs a `hdrfix.exe` in the repository folder.
 ```
 pip install -r requirements-dev.txt
 pyinstaller AutoHDRConvert.spec
@@ -59,9 +66,8 @@ python -m unittest discover -s tests
 
 ## Future Plans (Roadmap)
 
-Further development will be limited due to time and workload constraints, but I will try to implement the following when I get a chance:
-* Option to adjust HDRFix settings and parameters
-* Modern UI refresh
+Further development will be limited by time and workload, but I will try to implement the following when I get a chance:
+* More HDRFix settings beyond the tone presets
 * Start with Windows / start minimised
 
 Any suggestions, requests or issues can be left by opening an issue or submitting a pull request, and I will try to take a look.

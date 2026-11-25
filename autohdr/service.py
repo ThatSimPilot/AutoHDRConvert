@@ -1,7 +1,8 @@
 """ConversionService: watch a folder and convert new .jxr files one at a time on a worker thread.
 
 No Qt, no tkinter. Events go to `on_event` from non-UI threads (StateChanged from start()/stop() comes from the
-caller's thread). watchdog's dispatch thread only enqueues; a single worker thread does the converting.
+caller's thread, one for a watcher that died on its own comes from a health-check thread). watchdog's dispatch thread
+only enqueues; a single worker thread does the converting.
 """
 import logging
 import os
@@ -76,6 +77,12 @@ class _Handler(FileSystemEventHandler):
     def on_moved(self, event):  # files are often renamed into place
         self._add(event, "dest_path")
 
+    def on_events_lost(self, event):  # the OS dropped events (a burst overflowed its buffer): list the folder instead
+        try:
+            self._service._rescan(self._token)
+        except Exception:
+            log.error("Error rescanning after lost file events", exc_info=True)
+
     def _add(self, event, attr):
         try:  # an exception escaping here would silently kill watchdog's thread while the UI says "Watching"
             path = getattr(event, attr)
@@ -94,6 +101,8 @@ def _stop_observer(observer):
 
 
 class ConversionService:
+    HEALTH_INTERVAL = 5.0  # seconds between checks that the watcher is still alive
+
     def __init__(self, on_event: Callable[[ServiceEvent], None], settings: Settings | None = None):
         self._on_event = on_event
         self._settings = _normalised(settings or Settings())  # replaced wholesale by configure(), never mutated
@@ -106,7 +115,8 @@ class ConversionService:
         self._closed = False
         self._worker = None
         self._child = None  # the running hdrfix process, so shutdown() can terminate it
-        self._retiring = []  # threads that are stopping old observers
+        self._retiring = []  # threads that are stopping old observers (and finished health checks)
+        self._health = None  # (thread, stop event) of the current watcher's health check
 
     @property
     def running(self) -> bool:
@@ -115,7 +125,7 @@ class ConversionService:
     # -- public API ---------------------------------------------------------------------------------------------
 
     def configure(self, settings: Settings) -> None:
-        """output_dir/delete_original apply from the next file; a changed input_dir restarts a running watcher."""
+        """output_dir/delete_original/tone_preset apply from the next file; a changed input_dir restarts a running watcher."""
         s = _normalised(settings)
         with self._lock:
             old, self._settings = self._settings, s
@@ -147,8 +157,12 @@ class ConversionService:
             except Exception as e:
                 observer, error = None, f"Couldn't start watching that folder: {e}"
         if observer:
+            stop = threading.Event()
+            thread = threading.Thread(target=self._monitor, args=(token, observer, s.input_dir, stop),
+                                      name="autohdr-health", daemon=True)
             with self._lock:
-                self._observer, self._running = observer, True
+                self._observer, self._running, self._health = observer, True, (thread, stop)
+            thread.start()
             log.info(f"Watching {s.input_dir}")
         else:
             log.error(f"Not watching: {error}")
@@ -196,12 +210,22 @@ class ConversionService:
         except Exception:
             log.error("on_event handler raised", exc_info=True)
 
-    def _halt(self):
-        """Invalidate the current session, drop queued (not yet started) work and retire the observer."""
+    def _halt(self, token=None):
+        """Invalidate the current session, drop queued (not yet started) work and retire the observer.
+
+        With a token, does nothing and returns False unless that session is still the current one.
+        """
         with self._lock:
+            if token is not None and token != self._session:
+                return False
             self._session += 1
             self._running = False
             observer, self._observer = self._observer, None
+            health, self._health = self._health, None
+            retiring = []
+            if health:
+                health[1].set()
+                retiring.append(health[0])
             sentinel = False
             while True:
                 try:
@@ -216,8 +240,48 @@ class ConversionService:
                 self._queue.put(None)
             if observer:
                 t = threading.Thread(target=_stop_observer, args=(observer,), name="autohdr-observer-stop", daemon=True)
-                self._retiring = [x for x in self._retiring if x.is_alive()] + [t]
+                retiring.append(t)
                 t.start()
+            self._retiring = [x for x in self._retiring if x.is_alive()] + retiring
+        return True
+
+    def _monitor(self, token, observer, input_dir, stop):
+        """Health check (own thread): if the watcher died or its folder is gone, say so instead of staying "Watching".
+
+        watchdog's Windows emitter stops itself when the watched folder is deleted, and the observer thread lives on.
+        """
+        while not stop.wait(self.HEALTH_INTERVAL):
+            if not os.path.isdir(input_dir):
+                reason = "The watch folder was removed"
+            elif not (observer.is_alive() and all(e.is_alive() for e in getattr(observer, "emitters", ()))):
+                reason = "Watching stopped unexpectedly"
+            else:
+                continue
+            if self._halt(token):  # False: the user already stopped or restarted it
+                log.error(f"Not watching any more: {reason}")
+                self._emit(StateChanged(False, reason))
+            return
+
+    def _rescan(self, token):
+        """After watchdog reports lost events: queue the folder's .jxr files that have no output yet (top level only).
+
+        _enqueue dedupes against files already queued or converting.
+        """
+        with self._lock:
+            s = self._settings
+            if token != self._session:
+                return
+        log.warning(f"File events were lost; rescanning {s.input_dir}")
+        out = s.output_dir or s.input_dir
+        try:
+            with os.scandir(s.input_dir) as entries:
+                names = sorted(e.name for e in entries if e.is_file() and os.path.splitext(e.name)[1].lower() == ".jxr")
+        except OSError as e:
+            log.error(f"Couldn't rescan {s.input_dir}: {e}")
+            return
+        for name in names:
+            if not os.path.exists(os.path.join(out, f"{os.path.splitext(name)[0]}-sdr.jpg")):
+                self._enqueue(os.path.join(s.input_dir, name), token=token)
 
     def _enqueue(self, src, token=None, retry=False):
         key = _key(src)
@@ -233,6 +297,20 @@ class ConversionService:
     def _set_child(self, proc):
         with self._lock:
             self._child = proc
+            closing = proc is not None and self._closed
+        if closing:  # shutdown() may have run its terminate step before this child existed: don't leave it running
+            try:
+                proc.terminate()
+            except OSError as e:
+                log.error(f"Could not terminate hdrfix: {e}")
+
+    def _ready(self, src):
+        """convert_file calls this once the file has settled, right before hdrfix starts. False: the app is closing."""
+        with self._lock:
+            if self._closed:
+                return False
+        self._emit(ConversionStarted(src))
+        return True
 
     def _run(self):
         while True:
@@ -251,7 +329,11 @@ class ConversionService:
                 self._emit(ConversionFinished(result))
 
     def _process(self, src, retry):
-        """Returns the result to report, or None for a file that vanished before we started (silently skipped)."""
+        """Returns the result to report, or None for a file that vanished before hdrfix started (silently skipped).
+
+        ConversionStarted is emitted by _ready, once the file has settled, so a file that vanishes while we wait for
+        it never leaves the UI stuck on "Converting" without a ConversionFinished.
+        """
         with self._lock:
             s = self._settings
         if not os.path.exists(src):
@@ -259,8 +341,8 @@ class ConversionService:
                 return _failure(src, "The original file no longer exists")
             log.info(f"Skipped {src}: it was removed before conversion started")
             return None
-        self._emit(ConversionStarted(src))
         hdrfix = find_hdrfix()
         if hdrfix is None:
             return _failure(src, HDRFIX_MISSING)
-        return convert_file(src, s.output_dir or os.path.dirname(src), hdrfix, s.delete_original, self._set_child)
+        return convert_file(src, s.output_dir or os.path.dirname(src), hdrfix, s.delete_original, self._set_child,
+                            tone_preset=s.tone_preset, on_ready=lambda: self._ready(src))

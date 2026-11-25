@@ -4,7 +4,7 @@ import logging
 import os
 from dataclasses import asdict, fields
 
-from .models import Settings
+from .models import TONE_PRESETS, Settings
 from .paths import APP_NAME, app_data_dir, app_dir, clean_path, config_path
 
 log = logging.getLogger(APP_NAME)
@@ -15,6 +15,8 @@ PATH_FIELDS = ("input_dir", "output_dir")
 def _acceptable(name, default, value):
     if name == "notifications":
         return value in NOTIFICATION_MODES
+    if name == "tone_preset":
+        return isinstance(value, str) and value in TONE_PRESETS  # str check first: a JSON list/dict is unhashable
     return type(value) is type(default)  # exact: 1 is not a bool and "yes" is not a bool
 
 

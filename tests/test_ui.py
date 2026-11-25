@@ -14,9 +14,9 @@ from PySide6.QtGui import QColor  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from autohdr.models import ConversionResult, Problems, Settings  # noqa: E402
+from autohdr.models import TONE_PRESETS, ConversionResult, Problems, Settings  # noqa: E402
 from autohdr.ui import icons, main_window, theme  # noqa: E402
-from autohdr.ui.main_window import MainWindow, clean_path, elide_path, relative_time  # noqa: E402
+from autohdr.ui.main_window import MainWindow  # noqa: E402
 from autohdr.ui.settings_dialog import SettingsDialog  # noqa: E402
 
 app = None
@@ -26,10 +26,6 @@ def setUpModule():
     global app
     app = QApplication.instance() or QApplication([])
     theme.apply(app, "light")
-
-
-def ok(name="a", ago=0.0, removed=False):
-    return ConversionResult(True, f"C:/shots/{name}.jxr", f"C:/shots/{name}-sdr.jpg", "", removed, time.time() - ago)
 
 
 def bad(name="a", msg="hdrfix failed"):
@@ -61,30 +57,6 @@ class Base(unittest.TestCase):
         got = []
         signal.connect(lambda *a: got.append(a[0] if len(a) == 1 else a))
         return got
-
-
-class Helpers(unittest.TestCase):
-    def test_clean_path(self):
-        self.assertEqual(clean_path('  "C:\\My Pics"  '), "C:\\My Pics")
-        self.assertEqual(clean_path("  C:\\x "), "C:\\x")
-        self.assertEqual(clean_path('"'), '"')
-        self.assertEqual(clean_path(""), "")
-
-    def test_relative_time(self):
-        self.assertEqual(relative_time(100, 101), "just now")
-        self.assertEqual(relative_time(100, 112), "12s ago")
-        self.assertEqual(relative_time(0, 300), "5 min ago")
-        self.assertEqual(relative_time(0, 7300), "2 h ago")
-        self.assertEqual(relative_time(0, 90000), "1 d ago")
-        self.assertEqual(relative_time(200, 100), "just now")      # clock skew never goes negative
-
-    def test_elide_path(self):
-        self.assertEqual(elide_path("C:\\short"), "C:\\short")
-        long = "C:\\Users\\Someone\\Pictures\\Screenshots\\Games\\Flight Sim\\2026"
-        out = elide_path(long, 30)
-        self.assertEqual(len(out), 30)
-        self.assertIn("…", out)
-        self.assertTrue(out.endswith("2026"))
 
 
 class Palette(unittest.TestCase):
@@ -142,19 +114,6 @@ class MainWindowSignals(Base):
         got = self.record(win.toggle_requested)
         win.toggle_button.click()
         self.assertEqual(len(got), 1)
-
-    def test_retry_emits_source_and_replaces_old_failure(self):
-        win = self.window()
-        got = self.record(win.retry_requested)
-        win.add_activity(bad("x"))
-        row = win._rows[0]
-        row.retry_btn.click()
-        self.assertEqual(got, ["C:/shots/x.jxr"])
-        self.assertFalse(row.retry_btn.isEnabled())             # no double-click while the retry is queued
-        win.add_activity(ok("x"))                                # retry succeeded: the stale failed row goes away
-        self.assertEqual([r.result.ok for r in win._rows], [True, False])
-        win.add_activity(bad("x"))                               # another failure replaces the previous failure
-        self.assertEqual(sum(1 for r in win._rows if not r.result.ok), 1)
 
     def test_text_edit_is_debounced_then_emitted_once(self):
         win = self.window(Settings(input_dir=""))
@@ -234,6 +193,8 @@ class MainWindowSignals(Base):
         self.assertTrue(got[-1].output_to_log)
         dlg.notify_choices["all"].click()
         self.assertEqual(got[-1].notifications, "all")
+        dlg.tone_choices["punchy"].click()
+        self.assertEqual(got[-1].tone_preset, "punchy")
         self.assertEqual(got[-1].input_dir, "C:/shots")          # folder fields are untouched
         dlg.close()
 
@@ -287,80 +248,6 @@ class MainWindowClosing(Base):
         self.assertEqual(order, [("settings", "C:\\late"), ("quit", None)])
 
 
-class ActivityList(Base):
-    def test_newest_first_and_counter(self):
-        win = self.window()
-        self.assertEqual(win.counter_label.text(), "0 converted this session")
-        self.assertIs(win._stack.currentWidget().__class__.__name__ != "QScrollArea", True)   # empty state
-        win.add_activity(ok("first"))
-        win.add_activity(bad("second"))
-        win.add_activity(ok("third"))
-        self.assertEqual([os.path.basename(r.result.src) for r in win._rows], ["third.jxr", "second.jxr", "first.jxr"])
-        self.assertEqual(win._rows_layout.itemAt(0).widget(), win._rows[0])
-        self.assertEqual(win.counter_label.text(), "2 converted this session")      # failures are not conversions
-        self.assertIs(win._stack.currentWidget(), win.scroll)
-
-    def test_keeps_last_100_rows_but_counts_everything(self):
-        win = self.window()
-        for i in range(130):
-            win.add_activity(ok(f"f{i}"))
-        self.assertEqual(len(win._rows), 100)
-        self.assertEqual(win._rows_layout.count(), 101)                              # rows + trailing stretch
-        self.assertEqual(os.path.basename(win._rows[0].result.src), "f129.jxr")
-        self.assertEqual(os.path.basename(win._rows[-1].result.src), "f30.jxr")
-        self.assertEqual(win.counter_label.text(), "130 converted this session")
-
-    def test_row_actions(self):
-        win = self.window()
-        win.add_activity(ok("pic", removed=True))
-        row = win._rows[0]
-        self.assertEqual(row.show_btn.accessibleName(), "Show in folder")
-        self.assertEqual(row.open_btn.accessibleName(), "Open image")
-        self.assertIn("Recycle Bin", " ".join(w.text() for w in row.findChildren(main_window.QLabel)))
-        with mock.patch.object(main_window.subprocess, "Popen") as popen, \
-                mock.patch.object(main_window.os, "startfile", create=True) as start:
-            row.show_btn.click()
-            row.open_btn.click()
-        self.assertEqual(popen.call_args.args[0], 'explorer /select,"' + os.path.normpath("C:/shots/pic-sdr.jpg") + '"')
-        start.assert_called_once_with("C:/shots/pic-sdr.jpg")
-
-    def test_row_actions_never_raise(self):
-        with mock.patch.object(main_window.subprocess, "Popen", side_effect=OSError("boom")), \
-                mock.patch.object(main_window.os, "startfile", create=True, side_effect=OSError("boom")):
-            main_window._show_in_folder("C:/x.jpg")
-            main_window._open_file("C:/x.jpg")
-
-    def test_failed_row_shows_reason_and_retry(self):
-        win = self.window()
-        win.add_activity(bad("broken", "hdrfix failed: unsupported"))
-        row = win._rows[0]
-        self.assertEqual(row.detail_label.fullText(), "hdrfix failed: unsupported")
-        self.assertIsNotNone(row.retry_btn)
-        self.assertIsNone(row.show_btn)
-
-    def test_relative_times_refresh(self):
-        win = self.window()
-        win.add_activity(ok("t"))
-        row = win._rows[0]
-        self.assertEqual(row.time_label.text(), "just now")
-        row.refresh_time(row.result.finished_at + 300)
-        self.assertEqual(row.time_label.text(), "5 min ago")
-        win.refresh_times()                                      # public hook used by the 30 s timer
-        self.assertEqual(row.time_label.text(), "just now")
-
-    def test_long_names_elide_instead_of_widening(self):
-        win = self.window()
-        width = win.width()
-        win.add_activity(ok("s"))
-        win.add_activity(ok("n" * 200))
-        app.processEvents()
-        long_row, short_row = win._rows
-        self.assertEqual(win.width(), width)
-        self.assertEqual(long_row.minimumSizeHint().width(), short_row.minimumSizeHint().width())   # names can't force width
-        self.assertIn("…", long_row.src_label.text())
-        self.assertEqual(long_row.src_label.fullText(), "n" * 200 + ".jxr")
-
-
 class StatusAndProblems(Base):
     def test_state_copy(self):
         win = self.window()
@@ -403,6 +290,48 @@ class StatusAndProblems(Base):
         self.assertEqual(win.out_err.text(), "Can't write there.")
         win.set_problems(Problems())
         self.assertFalse(win.out_err.isVisibleTo(win))
+
+    def test_error_card_clears_when_the_folder_problem_is_fixed(self):
+        win = self.window()
+        win.set_problems(Problems(input="This folder doesn't exist."))
+        win.set_running(False, "That folder doesn't exist.")
+        self.assertEqual((win.title_label.fullText(), win.detail_label.text()), ("Can't watch this folder", "That folder doesn't exist."))
+        win.set_problems(Problems())                             # the user fixed the folder
+        self.assertEqual((win.title_label.fullText(), win.toggle_button.text()), ("Paused", "Resume"))
+        self.assertFalse(win.detail_label.isVisibleTo(win))
+        self.assertEqual(win.badge.state(), "paused")
+
+    def test_error_card_survives_unrelated_problem_updates(self):
+        win = self.window()
+        win.set_running(False, "Access is denied.")              # e.g. start() failed with no validation problem
+        win.set_problems(Problems())                             # arrives right after the failed restart: keep the error
+        self.assertEqual(win.title_label.fullText(), "Can't watch this folder")
+        win.set_problems(Problems(output="Can't write there."))
+        self.assertEqual(win.detail_label.text(), "Access is denied.")
+
+    def test_folder_edit_clears_a_stale_error_but_other_edits_do_not(self):
+        win = self.window()
+        got = self.record(win.settings_changed)
+        win.set_running(False, "The folder vanished")
+        win.bin_choice.click()                                   # not a folder edit
+        self.assertEqual(win.title_label.fullText(), "Can't watch this folder")
+        win.in_edit.setText("D:/other")
+        win.in_edit.editingFinished.emit()
+        self.assertEqual((win.title_label.fullText(), win.toggle_button.text()), ("Paused", "Resume"))
+        self.assertEqual(got[-1].input_dir, "D:/other")
+        win.set_running(False, "Still broken")                   # a failed restart reports after the edit and shows
+        self.assertEqual(win.detail_label.text(), "Still broken")
+
+    def test_set_running_without_error_clears_the_error_text(self):
+        win = self.window()
+        win.set_running(False, "boom")
+        win.set_running(False, "")
+        self.assertEqual(win.title_label.fullText(), "Paused")
+        self.assertFalse(win.detail_label.isVisibleTo(win))
+        self.assertEqual(win.detail_label.text(), "")
+        win.set_running(False, "boom")
+        win.set_running(True)
+        self.assertEqual(win.title_label.fullText(), "Watching for HDR screenshots")
 
     def test_pause_stays_available_while_running(self):
         win = self.window()
@@ -457,6 +386,26 @@ class SettingsDialogTests(unittest.TestCase):
         self.assertEqual(len(got), 2)
         self.assertTrue(got[0].auto_start)
         self.assertFalse(got[1].minimize_to_tray)
+
+    def test_tone_picker_lists_presets_and_emits_the_key(self):
+        d = self.dialog()
+        got = []
+        d.settings_changed.connect(got.append)
+        self.assertEqual([c.text() for c in d.tone_choices.values()], [label for label, _ in TONE_PRESETS.values()])
+        self.assertEqual(list(d.tone_choices), list(TONE_PRESETS))
+        d.tone_choices["bright"].click()
+        d.tone_choices["punchy"].click()
+        self.assertEqual([s.tone_preset for s in got], ["bright", "punchy"])
+
+    def test_set_settings_tone_is_silent_and_unknown_key_is_safe(self):
+        d = self.dialog()
+        got = []
+        d.settings_changed.connect(got.append)
+        d.set_settings(Settings(tone_preset="punchy"))
+        self.assertTrue(d.tone_choices["punchy"].isChecked())
+        d.set_settings(Settings(tone_preset="no-such-preset"))   # falls back to the first preset
+        self.assertTrue(d.tone_choices["natural"].isChecked())
+        self.assertEqual(got, [])
 
     def test_open_log_folder_callable_is_used_and_guarded(self):
         calls = []

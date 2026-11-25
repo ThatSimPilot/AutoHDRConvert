@@ -44,6 +44,24 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(os.path.isfile(self.new_file))
         self.assertEqual(config.load_settings(), s)
 
+    def test_tone_preset_round_trips_and_defaults_to_natural(self):
+        for key in ("natural", "punchy", "bright"):
+            with self.subTest(key=key):
+                self.assertTrue(config.save_settings(Settings(tone_preset=key)))
+                with open(self.new_file, encoding="utf-8") as f:
+                    self.assertEqual(json.load(f)["tone_preset"], key)
+                self.assertEqual(config.load_settings().tone_preset, key)
+        self.write_new({"input_dir": "C:\\in"})  # an older config without the key
+        self.assertEqual(config.load_settings().tone_preset, "natural")
+
+    def test_bad_tone_preset_falls_back_to_natural_for_that_field_only(self):
+        for value in ("loud", "", "PUNCHY", 5, None, True, ["punchy"], {"punchy": 1}):
+            with self.subTest(value=value):
+                self.write_new({"tone_preset": value, "input_dir": "C:\\in", "auto_start": False})
+                with self.assertLogs(LOGGER, "WARNING"):
+                    got = config.load_settings()
+                self.assertEqual(got, Settings(input_dir="C:\\in", auto_start=False, tone_preset="natural"))
+
     def test_legacy_config_used_only_while_new_one_is_absent(self):
         with open(self.legacy_file, "w", encoding="utf-8") as f:
             json.dump({"input_dir": "legacy_in", "unknown_key": 1}, f)

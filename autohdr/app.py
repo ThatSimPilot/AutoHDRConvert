@@ -1,19 +1,22 @@
 """Application entry point: builds the real objects, wires them (see controller.py) and runs the Qt event loop."""
+import ctypes
 import logging
 import os
 import sys
 import threading
+import time
+import traceback
 from types import SimpleNamespace
 
 from PySide6.QtCore import QtMsgType, qInstallMessageHandler
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from autohdr import __version__
 from autohdr.config import load_settings, save_settings
-from autohdr.controller import Controller
+from autohdr.controller import TITLE, Controller
 from autohdr.instance import SingleInstance
 from autohdr.logs import setup_logging
-from autohdr.paths import APP_NAME, app_data_dir, find_hdrfix
+from autohdr.paths import APP_NAME, app_data_dir, find_hdrfix, log_path
 from autohdr.service import ConversionService, validate_settings
 from autohdr.ui import icons, theme
 from autohdr.ui.main_window import MainWindow
@@ -91,24 +94,56 @@ def build() -> SimpleNamespace:
     return SimpleNamespace(settings=settings, tray=tray, window=window, service=service, controller=controller)
 
 
+def _report_fatal(exc: BaseException) -> None:
+    """Startup failed before there was a window. The windowed build has no console and the log file may be off,
+    so append the traceback to the log file directly and tell the user. Never raises."""
+    text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    try:
+        os.makedirs(app_data_dir(), exist_ok=True)
+        with open(log_path(), "a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - CRITICAL - Fatal error during startup\n{text}")
+    except Exception:
+        pass
+    try:
+        if sys.stderr is not None:
+            sys.stderr.write(text)
+    except Exception:
+        pass
+    message = f"{TITLE} couldn't start.\n\n{type(exc).__name__}: {exc}\n\nDetails: {log_path()}"
+    try:
+        if QApplication.instance() is not None:
+            QMessageBox.critical(None, TITLE, message)
+            return
+    except Exception:
+        pass
+    try:
+        ctypes.windll.user32.MessageBoxW(None, message, TITLE, 0x10)   # MB_ICONERROR
+    except Exception:
+        pass
+
+
 def main() -> int:
     global _toast
     install_hooks()
-    app = QApplication(sys.argv)
-    app.setApplicationName(APP_NAME)
-    app.setOrganizationName(APP_NAME)
-    app.setApplicationVersion(__version__)
-    app.setQuitOnLastWindowClosed(False)   # the tray keeps the app alive while the window is hidden
-    guard = SingleInstance()
-    if not guard.acquire():
-        return 0                            # the running instance was asked to show itself
-    theme.apply(app)
-    app.setWindowIcon(icons.app_icon())
-    parts = build()
-    _keep.extend([guard, parts])
-    _toast = parts.tray.notify
-    guard.show_requested.connect(parts.window.show_and_raise)
-    app.aboutToQuit.connect(parts.controller.quit)   # also covers logoff/shutdown; quit() is idempotent
-    parts.window.show_and_raise()
-    parts.controller.start_initial()
+    try:
+        app = QApplication(sys.argv)
+        app.setApplicationName(APP_NAME)
+        app.setOrganizationName(APP_NAME)
+        app.setApplicationVersion(__version__)
+        app.setQuitOnLastWindowClosed(False)   # the tray keeps the app alive while the window is hidden
+        guard = SingleInstance()
+        if not guard.acquire():
+            return 0                            # the running instance was asked to show itself
+        theme.apply(app)
+        app.setWindowIcon(icons.app_icon())
+        parts = build()
+        _keep.extend([guard, parts])
+        _toast = parts.tray.notify
+        guard.show_requested.connect(parts.window.show_and_raise)
+        app.aboutToQuit.connect(parts.controller.quit)   # also covers logoff/shutdown; quit() is idempotent
+        parts.window.show_and_raise()
+        parts.controller.start_initial()
+    except Exception as e:
+        _report_fatal(e)
+        return 1
     return app.exec()

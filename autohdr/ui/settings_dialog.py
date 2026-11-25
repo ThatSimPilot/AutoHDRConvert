@@ -5,7 +5,7 @@ from collections.abc import Callable
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QButtonGroup, QDialog, QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
-from autohdr.models import Settings
+from autohdr.models import TONE_PRESETS, Settings
 
 from .icons import Choice, ElidedLabel, Switch, make_button
 
@@ -90,6 +90,19 @@ class SettingsDialog(QDialog):
             lay.addWidget(c)
 
         col.addSpacing(8)
+        lay = _card(col, "Tone")
+        self._tone_group = QButtonGroup(self)
+        self.tone_choices = {}
+        for key, (text, _args) in TONE_PRESETS.items():
+            c = Choice(text)
+            self.tone_choices[key] = c
+            self._tone_group.addButton(c)
+            lay.addWidget(c)
+        tone_note = _label("Changes apply to the next converted file.", "caption", wrap=True)
+        tone_note.setContentsMargins(36, 0, 8, 6)
+        lay.addWidget(tone_note)
+
+        col.addSpacing(8)
         lay = _card(col, "General")
         self.auto_start = Switch("Start watching when the app opens")
         self.log_switch = Switch("Write a log file")
@@ -130,7 +143,9 @@ class SettingsDialog(QDialog):
         foot.addWidget(done)
         col.addLayout(foot)
 
-        for c in (self.quit_choice, self.tray_choice, *self.notify_choices.values(), self.auto_start, self.log_switch):
+        self._controls = (self.quit_choice, self.tray_choice, *self.notify_choices.values(),
+                          *self.tone_choices.values(), self.auto_start, self.log_switch)
+        for c in self._controls:
             c.toggled.connect(self._edited)
         self.set_hdrfix_path(hdrfix_path)
         self.set_settings(settings)
@@ -140,16 +155,16 @@ class SettingsDialog(QDialog):
     def set_settings(self, s: Settings) -> None:
         """Populate without emitting."""
         self._settings = dataclasses.replace(s)
-        widgets = (self.quit_choice, self.tray_choice, *self.notify_choices.values(), self.auto_start, self.log_switch)
-        for w in widgets:
+        for w in self._controls:
             w.blockSignals(True)
         on_tray = s.minimize_to_tray and self._tray_available
         self.tray_choice.setChecked(on_tray)
         self.quit_choice.setChecked(not on_tray)
         self.notify_choices.get(s.notifications, self.notify_choices["failures"]).setChecked(True)
+        self.tone_choices.get(s.tone_preset, next(iter(self.tone_choices.values()))).setChecked(True)
         self.auto_start.setChecked(s.auto_start)
         self.log_switch.setChecked(s.output_to_log)
-        for w in widgets:
+        for w in self._controls:
             w.blockSignals(False)
             w.update()
 
@@ -172,8 +187,9 @@ class SettingsDialog(QDialog):
 
     def _collect(self) -> Settings:
         mode = next((k for k, c in self.notify_choices.items() if c.isChecked()), self._settings.notifications)
+        tone = next((k for k, c in self.tone_choices.items() if c.isChecked()), self._settings.tone_preset)
         return dataclasses.replace(
-            self._settings, minimize_to_tray=self.tray_choice.isChecked(), notifications=mode,
+            self._settings, minimize_to_tray=self.tray_choice.isChecked(), notifications=mode, tone_preset=tone,
             auto_start=self.auto_start.isChecked(), output_to_log=self.log_switch.isChecked())
 
     def _edited(self, *_) -> None:

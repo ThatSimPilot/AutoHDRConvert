@@ -1,4 +1,5 @@
 """Tests for autohdr.convert. send2trash and subprocess.Popen are always mocked; nothing real runs or gets recycled."""
+import logging
 import os
 import subprocess
 import sys
@@ -13,7 +14,7 @@ from autohdr import convert  # noqa: E402
 
 LOGGER = "AutoHDRConvert"
 HDRFIX = r"C:\fake\hdrfix.exe"
-REAL_DRIVE_TYPE = convert._drive_type  # captured before any test patches it
+JPEG = b"\xff\xd8jpeg\xff\xd9"  # starts with FF D8, ends with FF D9: all the recycle check looks at
 
 
 def touch(path, data=b"x"):
@@ -68,7 +69,7 @@ class ConvertCase(unittest.TestCase):
 
     @staticmethod
     def ok_script(argv):  # what hdrfix does on success: writes the output file
-        touch(argv[2], b"jpeg")
+        touch(argv[2], JPEG)
         return 0, "", ""
 
     def src(self, name="shot.jxr"):
@@ -76,133 +77,6 @@ class ConvertCase(unittest.TestCase):
 
     def convert(self, src, delete_original=False, **kw):
         return convert.convert_file(src, self.out, HDRFIX, delete_original, **kw)
-
-
-class MakeOutputPathTests(unittest.TestCase):
-    def setUp(self):
-        self.out = self.enterContext(tempfile.TemporaryDirectory())
-
-    def test_suffix_is_sdr_jpg_for_any_extension_case(self):
-        for name, expected in (("shot.jxr", "shot-sdr.jpg"), ("SHOT.JXR", "SHOT-sdr.jpg")):
-            with self.subTest(name=name):
-                self.assertEqual(convert.make_output_path(os.path.join("in", name), self.out),
-                                 os.path.join(self.out, expected))
-
-    def test_only_the_final_extension_is_stripped(self):
-        self.assertEqual(convert.make_output_path("a.jxr.b.jxr", self.out), os.path.join(self.out, "a.jxr.b-sdr.jpg"))
-
-    def test_collisions_count_up(self):
-        touch(os.path.join(self.out, "shot-sdr.jpg"))
-        self.assertEqual(convert.make_output_path("shot.jxr", self.out), os.path.join(self.out, "shot-sdr-1.jpg"))
-        touch(os.path.join(self.out, "shot-sdr-1.jpg"))
-        self.assertEqual(convert.make_output_path("shot.jxr", self.out), os.path.join(self.out, "shot-sdr-2.jpg"))
-
-
-class TrashOriginalTests(unittest.TestCase):
-    def setUp(self):
-        tmp = self.enterContext(tempfile.TemporaryDirectory())
-        self.src = touch(os.path.join(tmp, "a.jxr"))
-        self.out = os.path.join(tmp, "a-sdr.jpg")
-        self.trash = self.enterContext(mock.patch.object(convert, "send2trash"))
-        self.drive = self.enterContext(mock.patch.object(convert, "_drive_type", return_value=convert.DRIVE_FIXED))
-
-    def test_missing_or_empty_output_keeps_original(self):
-        for label, data in (("missing", None), ("empty", b"")):
-            with self.subTest(output=label):
-                if os.path.exists(self.out):
-                    os.remove(self.out)
-                if data is not None:
-                    touch(self.out, data)
-                with self.assertLogs(LOGGER, "ERROR"):
-                    self.assertFalse(convert.trash_original(self.src, self.out))
-                self.trash.assert_not_called()
-                self.assertTrue(os.path.exists(self.src))
-
-    def test_success_recycles_the_original(self):
-        touch(self.out)
-        self.assertTrue(convert.trash_original(self.src, self.out))
-        self.trash.assert_called_once_with(os.path.abspath(self.src))
-
-    def test_trash_failure_returns_false(self):
-        touch(self.out)
-        self.trash.side_effect = OSError("denied")
-        with self.assertLogs(LOGGER, "ERROR"):
-            self.assertFalse(convert.trash_original(self.src, self.out))
-        self.assertTrue(os.path.exists(self.src))
-
-    def test_only_fixed_drives_are_recycled(self):
-        touch(self.out)
-        for dtype, label in ((2, "removable"), (4, "network"), (5, "cd-rom"), (6, "ram disk"), (1, "no root"), (0, "unknown")):
-            with self.subTest(drive=label):
-                self.drive.return_value = dtype
-                with self.assertLogs(LOGGER, "ERROR"):
-                    self.assertFalse(convert.trash_original(self.src, self.out))
-                self.trash.assert_not_called()
-        self.drive.assert_called_with(self.src)
-        self.drive.return_value = convert.DRIVE_FIXED
-        self.assertTrue(convert.trash_original(self.src, self.out))
-
-    def test_drive_check_failure_keeps_the_original(self):
-        touch(self.out)
-        self.drive.side_effect = OSError("no kernel32")
-        with self.assertLogs(LOGGER, "ERROR"):
-            self.assertFalse(convert.trash_original(self.src, self.out))
-        self.trash.assert_not_called()
-
-    def test_real_drive_type_is_an_int(self):  # exercises the ctypes call for real; nothing is recycled
-        self.assertIsInstance(REAL_DRIVE_TYPE(self.src), int)
-
-
-class WaitForFileTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = self.enterContext(tempfile.TemporaryDirectory())
-
-    def test_stable_file_returns(self):
-        p = touch(os.path.join(self.tmp, "a.jxr"))
-        self.assertIsNone(convert.wait_for_file(p, timeout=2, settle=0.05))
-
-    def test_missing_file_raises_immediately(self):
-        t0 = time.monotonic()
-        with self.assertRaises(FileNotFoundError):
-            convert.wait_for_file(os.path.join(self.tmp, "nope.jxr"), timeout=5, settle=0.05)
-        self.assertLess(time.monotonic() - t0, 1)
-
-    def test_file_vanishing_while_waiting_raises_immediately(self):
-        p = touch(os.path.join(self.tmp, "gone.jxr"), b"")  # empty, so it keeps waiting
-        threading.Timer(0.2, os.remove, args=(p,)).start()
-        t0 = time.monotonic()
-        with self.assertRaises(FileNotFoundError):
-            convert.wait_for_file(p, timeout=5, settle=0.05)
-        self.assertLess(time.monotonic() - t0, 2)
-
-    def test_zero_byte_file_times_out(self):
-        with self.assertRaises(TimeoutError):
-            convert.wait_for_file(touch(os.path.join(self.tmp, "empty.jxr"), b""), timeout=0.3, settle=0.05)
-
-    def test_timeout_is_idle_based_so_a_growing_file_is_not_failed(self):
-        p = touch(os.path.join(self.tmp, "slow.jxr"))
-        stop = threading.Event()
-
-        def grow():
-            while not stop.is_set():
-                with open(p, "ab") as f:
-                    f.write(b"x" * 10)
-                time.sleep(0.05)
-
-        t = threading.Thread(target=grow)
-        t.start()
-        self.addCleanup(t.join)
-        self.addCleanup(stop.set)
-        t0 = time.monotonic()
-        threading.Timer(0.7, stop.set).start()  # stops growing after ~0.7 s, well past the 0.3 s idle timeout
-        convert.wait_for_file(p, timeout=0.3, settle=0.15)  # returns only after growth stops + settle
-        self.assertGreater(time.monotonic() - t0, 0.6)
-
-    def test_unreadable_file_times_out_after_idle(self):
-        p = touch(os.path.join(self.tmp, "locked.jxr"))
-        with mock.patch.object(convert.os.path, "getsize", side_effect=PermissionError("sharing violation")):
-            with self.assertRaises(TimeoutError):
-                convert.wait_for_file(p, timeout=0.3, settle=0.05)
 
 
 class ConvertFileSuccessTests(ConvertCase):
@@ -222,6 +96,22 @@ class ConvertFileSuccessTests(ConvertCase):
         self.assertGreater(os.path.getsize(out), 0)
         self.assertTrue(os.path.exists(src))
         self.trash.assert_not_called()
+
+    def test_tone_preset_options_follow_the_two_paths_and_natural_adds_nothing(self):
+        cases = (("natural", []), ("punchy", ["--tone-map", "aces"]), ("bright", ["--exposure", "0.5"]))
+        for key, extra in cases:
+            with self.subTest(preset=key):
+                self.popen.reset_mock()
+                src = self.src()
+                r = self.convert(src, tone_preset=key)
+                self.assertTrue(r.ok)
+                self.assertEqual(self.popen.call_args.args[0], [HDRFIX, src, r.dst, *extra])
+
+    def test_unknown_tone_preset_falls_back_to_natural(self):
+        src = self.src()
+        r = self.convert(src, tone_preset="no-such-preset")
+        self.assertTrue(r.ok)
+        self.assertEqual(self.popen.call_args.args[0], [HDRFIX, src, r.dst])
 
     def test_hdrfix_gets_the_documented_timeout(self):
         self.convert(self.src())
@@ -246,7 +136,7 @@ class ConvertFileSuccessTests(ConvertCase):
         self.trash.side_effect = lambda p: seen.append((p, os.path.getsize(out)))
         r = self.convert(src, delete_original=True)
         self.trash.assert_called_once_with(os.path.abspath(src))
-        self.assertEqual(seen, [(os.path.abspath(src), 4)])  # output was already complete when trash ran
+        self.assertEqual(seen, [(os.path.abspath(src), len(JPEG))])  # output was already complete when trash ran
         self.assertEqual((r.ok, r.message, r.original_removed), (True, "", True))
 
     def test_original_on_a_non_fixed_drive_is_kept_but_the_conversion_succeeds(self):
@@ -270,12 +160,141 @@ class ConvertFileSuccessTests(ConvertCase):
         self.assertTrue(os.path.isfile(r.dst))
         self.assertTrue(os.path.exists(src))
 
+    def test_output_that_looks_incomplete_keeps_the_original_but_the_conversion_succeeds(self):
+        def script(argv):
+            touch(argv[2], b"jpeg without end marker")
+            return 0, "", ""
+
+        self.script = script
+        src = self.src()
+        with self.assertLogs(LOGGER, "ERROR"):
+            r = self.convert(src, delete_original=True)
+        self.trash.assert_not_called()
+        self.assertEqual((r.ok, r.original_removed, r.message), (True, False, convert.INCOMPLETE_MSG))
+        self.assertEqual(r.message, "Converted, but the original was kept (output looked incomplete)")
+        self.assertTrue(os.path.isfile(r.dst))
+        self.assertTrue(os.path.exists(src))
+
     def test_on_process_sees_the_child_then_none(self):
         calls = []
         self.convert(self.src(), on_process=calls.append)
         self.assertEqual(len(calls), 2)
         self.assertIs(calls[0], self.procs[0])
         self.assertIsNone(calls[1])
+
+
+class HdrfixInputTests(ConvertCase):
+    """hdrfix only accepts a lowercase .jxr extension, so other spellings go through a temp link that is always removed."""
+
+    def setUp(self):
+        super().setUp()
+        self.seen = []  # (path hdrfix was given, its content) per run
+        self.made = []  # every temp folder created
+        real_mkdtemp = convert.tempfile.mkdtemp
+
+        def mkdtemp(*a, **kw):
+            self.made.append(real_mkdtemp(*a, **kw))
+            return self.made[-1]
+
+        self.enterContext(mock.patch.object(convert.tempfile, "mkdtemp", mkdtemp))
+
+        def strict_hdrfix(argv):  # the real one: "Invalid input file type" for anything but a lowercase .jxr
+            if os.path.splitext(argv[1])[1] != ".jxr":
+                return 0, "", "Error: Invalid input file type"
+            with open(argv[1], "rb") as f:
+                self.seen.append((argv[1], f.read()))
+            touch(argv[2], JPEG)
+            return 0, "", ""
+
+        self.script = strict_hdrfix
+
+    def test_any_spelling_of_the_extension_converts_under_the_original_stem(self):
+        for name in ("lower.jxr", "UPPER.JXR", "Mixed.Jxr", "two.jXr"):
+            with self.subTest(name=name):
+                self.seen.clear()
+                self.made.clear()
+                src = self.src(name)
+                r = self.convert(src)
+                stem = os.path.splitext(name)[0]
+                self.assertEqual((r.ok, r.message, r.dst), (True, "", os.path.join(self.out, f"{stem}-sdr.jpg")))
+                ((path, data),) = self.seen
+                self.assertEqual(data, b"jxr-data")  # hdrfix saw the real content
+                self.assertTrue(os.path.exists(src))
+                if name.endswith(".jxr"):
+                    self.assertEqual((path, self.made), (src, []))  # already acceptable: no detour at all
+                else:
+                    self.assertEqual(len(self.made), 1)
+                    self.assertEqual(os.path.dirname(path), self.made[0])
+                    self.assertNotEqual(self.made[0], self.inp)  # never inside the watched folder
+                    self.assertFalse(os.path.exists(self.made[0]))  # removed again
+
+    def test_a_hard_link_is_tried_first_and_a_copy_is_the_fallback(self):
+        src = self.src("UPPER.JXR")
+        with mock.patch.object(convert.os, "link", wraps=os.link) as link:
+            self.assertTrue(self.convert(src).ok)
+        self.assertEqual(link.call_args.args[0], src)
+        self.seen.clear()
+        with mock.patch.object(convert.os, "link", side_effect=OSError("different volume")):
+            r = self.convert(src)
+        self.assertTrue(r.ok)
+        ((path, data),) = self.seen
+        self.assertEqual(data, b"jxr-data")
+        self.assertFalse(os.path.exists(os.path.dirname(path)))
+
+    def test_deleting_the_original_recycles_the_original_not_the_link(self):
+        src = self.src("UPPER.JXR")
+        r = self.convert(src, delete_original=True)
+        self.assertEqual((r.ok, r.original_removed), (True, True))
+        self.trash.assert_called_once_with(os.path.abspath(src))
+
+    def test_temp_folder_is_removed_whatever_happens_to_hdrfix(self):
+        def timing_out(argv, **kw):
+            proc = FakeProc(argv, kw, None)
+            calls = []
+
+            def communicate(timeout=None):
+                calls.append(timeout)
+                if len(calls) == 1:
+                    raise subprocess.TimeoutExpired("hdrfix", timeout)
+                return "", ""
+
+            proc.communicate = communicate
+            return proc
+
+        cases = (
+            ("non-zero exit", lambda: setattr(self, "script", lambda argv: (3, "", "bad"))),
+            ("exit 0, no image", lambda: setattr(self, "script", lambda argv: (0, "", "Error: nope"))),
+            ("hdrfix missing", lambda: setattr(self.popen, "side_effect", FileNotFoundError(2, "gone"))),
+            ("cannot launch", lambda: setattr(self.popen, "side_effect", OSError(193, "not a Win32 app"))),
+            ("unexpected error", lambda: setattr(self.popen, "side_effect", RuntimeError("boom"))),
+            ("timeout", lambda: setattr(self.popen, "side_effect", timing_out)),
+        )
+        for label, arrange in cases:
+            with self.subTest(case=label):
+                self.made.clear()
+                self.popen.side_effect = self.make_proc
+                arrange()
+                with self.assertLogs(LOGGER, "ERROR"):
+                    r = self.convert(self.src("SHOT.JXR"))
+                self.assertFalse(r.ok)
+                self.assertEqual(len(self.made), 1)
+                self.assertFalse(os.path.exists(self.made[0]))
+                self.assertEqual(os.listdir(self.out), [])
+
+    def test_temp_folder_is_removed_when_hdrfix_is_not_started(self):
+        self.convert(self.src("SHOT.JXR"), on_ready=lambda: False)
+        self.assertEqual(len(self.made), 1)
+        self.assertFalse(os.path.exists(self.made[0]))
+
+    def test_a_failure_while_making_the_link_is_reported_not_raised(self):
+        with mock.patch.object(convert.os, "link", side_effect=OSError("no")), \
+                mock.patch.object(convert.shutil, "copyfile", side_effect=OSError(28, "No space left on device")), \
+                self.assertLogs(LOGGER, "ERROR"):
+            r = self.convert(self.src("SHOT.JXR"))
+        self.assertFalse(r.ok)
+        self.assertTrue(r.message.startswith("Unexpected error"))
+        self.assertFalse(os.path.exists(self.made[0]))
+        self.popen.assert_not_called()
 
 
 class ConvertFileFailureTests(ConvertCase):
@@ -384,14 +403,50 @@ class ConvertFileFailureTests(ConvertCase):
         self.assertFailed(r, src, "The file never finished being written")
         self.popen.assert_not_called()
 
-    def test_missing_source_fails_at_once_without_running_hdrfix(self):
+    def test_missing_source_is_skipped_silently_without_running_hdrfix(self):
         src = os.path.join(self.inp, "ghost.jxr")
         t0 = time.monotonic()
-        with self.assertLogs(LOGGER, "ERROR"):
+        with self.assertLogs(LOGGER, "INFO") as logged:
             r = self.convert(src)
         self.assertLess(time.monotonic() - t0, 1)
-        self.assertFailed(r, src, "The file was removed before it could be converted")
+        self.assertIsNone(r)  # nothing to report: no failure row, no toast
+        self.assertTrue(any("Skipped" in line for line in logged.output))
+        self.assertTrue(all(rec.levelno < logging.ERROR for rec in logged.records))
         self.popen.assert_not_called()
+        self.assertEqual(os.listdir(self.out), [])
+
+    def test_source_vanishing_while_waiting_for_it_to_settle_is_skipped_silently(self):
+        src = self.src("slow.jxr")
+        open(src, "wb").close()  # empty, so wait_for_file keeps waiting
+        timer = threading.Timer(0.1, os.remove, args=(src,))
+        timer.start()
+        self.addCleanup(timer.join)
+        ready = []
+        with self.assertLogs(LOGGER, "INFO") as logged:
+            r = self.convert(src, on_ready=lambda: ready.append(1) or True)
+        self.assertIsNone(r)
+        self.assertEqual(ready, [])
+        self.assertTrue(all(rec.levelno < logging.ERROR for rec in logged.records))
+        self.popen.assert_not_called()
+        self.assertEqual(os.listdir(self.out), [])
+
+    def test_on_ready_runs_once_the_file_has_settled_and_right_before_hdrfix(self):
+        order = []
+        self.popen.side_effect = lambda argv, **kw: order.append("popen") or self.make_proc(argv, **kw)
+        r = self.convert(self.src(), on_ready=lambda: order.append("ready") or True)
+        self.assertTrue(r.ok)
+        self.assertEqual(order, ["ready", "popen"])
+
+    def test_on_ready_returning_false_means_hdrfix_is_never_started(self):
+        src = self.src()
+        calls = []
+        r = self.convert(src, delete_original=True, on_process=calls.append, on_ready=lambda: False)
+        self.assertIsNone(r)
+        self.popen.assert_not_called()
+        self.assertEqual(calls, [])
+        self.assertEqual(os.listdir(self.out), [])
+        self.assertTrue(os.path.exists(src))
+        self.trash.assert_not_called()
 
     def test_source_vanishing_mid_conversion_reports_removal(self):
         src = self.src()

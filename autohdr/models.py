@@ -11,6 +11,15 @@ class Settings:
     output_to_log: bool = False
     notifications: str = "failures"   # "failures" | "all" | "off"
     auto_start: bool = True           # start watching when the app opens
+    tone_preset: str = "natural"      # key into TONE_PRESETS
+
+
+# key -> (label shown in the UI, extra hdrfix arguments)
+TONE_PRESETS = {
+    "natural": ("Natural", []),                       # hdrfix defaults
+    "punchy": ("Punchy", ["--tone-map", "aces"]),     # filmic curve, more contrast
+    "bright": ("Bright", ["--exposure", "0.5"]),      # half a stop brighter
+}
 
 
 @dataclass(frozen=True)

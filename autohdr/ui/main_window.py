@@ -1,70 +1,24 @@
 """Main window: status card, folder settings, recent-activity list. Talks to the app only through signals/setters."""
 import dataclasses
 import os
-import subprocess
-import time
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import (QButtonGroup, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-                               QMainWindow, QScrollArea, QStackedLayout, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLineEdit, QMainWindow,
+                               QVBoxLayout, QWidget)
 
 from autohdr.models import ConversionResult, Problems, Settings
+from autohdr.paths import clean_path
 
 from . import icons, theme
-from .icons import Choice, ElidedLabel, StatusBadge, make_button
+from .activity import ActivityList, make_elided as _elided, make_label as _label
+from .icons import Choice, StatusBadge, make_button
 from .settings_dialog import SettingsDialog
 
 TITLE = "Auto HDR-SDR Converter"
-MAX_ROWS = 100
 DEBOUNCE_MS = 400
 TICK_MS = 30_000
-
-
-# ---- small pure helpers (unit-tested) -------------------------------------------------------------------------
-
-def clean_path(text: str) -> str:
-    """Trim whitespace and one pair of surrounding double quotes (what Explorer's "Copy as path" pastes)."""
-    text = (text or "").strip()
-    if len(text) >= 2 and text[0] == text[-1] == '"':
-        text = text[1:-1].strip()
-    return text
-
-
-def relative_time(ts: float, now: float | None = None) -> str:
-    secs = max(0, int((time.time() if now is None else now) - ts))
-    if secs < 5:
-        return "just now"
-    if secs < 60:
-        return f"{secs}s ago"
-    if secs < 3600:
-        return f"{secs // 60} min ago"
-    if secs < 86400:
-        return f"{secs // 3600} h ago"
-    return f"{secs // 86400} d ago"
-
-
-def elide_path(path: str, limit: int = 44) -> str:
-    """Shorten a long path in the middle ("C:\\Users\\…\\Screenshots") for inline copy."""
-    if len(path) <= limit:
-        return path
-    head = (limit - 1) // 3
-    return path[:head] + "…" + path[-(limit - 1 - head):]
-
-
-def _show_in_folder(path: str) -> None:
-    try:
-        subprocess.Popen(f'explorer /select,"{os.path.normpath(path)}"')     # does not block; explorer returns 1 normally
-    except Exception:
-        pass
-
-
-def _open_file(path: str) -> None:
-    try:
-        os.startfile(path)
-    except Exception:
-        pass
 
 
 def _default_open_log_folder() -> None:
@@ -75,107 +29,6 @@ def _default_open_log_folder() -> None:
     except Exception:
         pass
 
-
-def _label(text: str = "", role: str = "", wrap: bool = False) -> QLabel:
-    lab = QLabel(text)
-    if role:
-        lab.setProperty("role", role)
-    lab.setWordWrap(wrap)
-    return lab
-
-
-def _elided(text: str = "", role: str = "", mode=Qt.TextElideMode.ElideMiddle) -> ElidedLabel:
-    lab = ElidedLabel(text, mode)
-    if role:
-        lab.setProperty("role", role)
-    return lab
-
-
-# ---- activity row ---------------------------------------------------------------------------------------------
-
-class ActivityRow(QFrame):
-    retry_clicked = Signal(str)
-
-    def __init__(self, result: ConversionResult, parent=None):
-        super().__init__(parent)
-        self.setObjectName("activityRow")
-        self.result = result
-        ok = result.ok
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(12, 8, 8, 8)
-        lay.setSpacing(12)
-
-        self.badge = StatusBadge(28)
-        self.badge.set_state("ok" if ok else "failed")
-        lay.addWidget(self.badge, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        text = QVBoxLayout()
-        text.setSpacing(1)
-        first = QHBoxLayout()
-        first.setSpacing(6)
-        self.src_label = _elided(os.path.basename(result.src))
-        first.addWidget(self.src_label)
-        if ok and result.dst:
-            first.addWidget(_label("→", "secondary"))
-            self.dst_label = _elided(os.path.basename(result.dst))
-            first.addWidget(self.dst_label)
-        first.addStretch(1)
-        text.addLayout(first)
-        second = QHBoxLayout()
-        second.setSpacing(0)
-        if ok:
-            self.detail_label = _elided(os.path.dirname(result.dst), "caption")
-            second.addWidget(self.detail_label)
-            second.addWidget(_label("   ·   " + ("Original moved to Recycle Bin" if result.original_removed else "Original kept"), "caption"))
-            second.addStretch(1)       # the fixed-size phrase keeps its text; only the path gives way
-        else:
-            self.detail_label = _elided(result.message or "Conversion failed", "error", Qt.TextElideMode.ElideRight)
-            second.addWidget(self.detail_label, 1)
-        text.addLayout(second)
-        lay.addLayout(text, 1)
-
-        self.time_label = _label("", "caption")
-        self.time_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.time_label.setMinimumWidth(self.time_label.fontMetrics().horizontalAdvance("59 min ago") + 4)
-        lay.addWidget(self.time_label)
-
-        self.retry_btn = self.show_btn = self.open_btn = None
-        if ok:
-            self.show_btn = make_button(icon_name="folder", icon_role="text2", tip="Show in folder", name="Show in folder")
-            self.open_btn = make_button(icon_name="open", icon_role="text2", tip="Open image", name="Open image")
-            self.show_btn.clicked.connect(lambda: _show_in_folder(result.dst))
-            self.open_btn.clicked.connect(lambda: _open_file(result.dst))
-            lay.addWidget(self.show_btn)
-            lay.addWidget(self.open_btn)
-            self.setToolTip(f"{result.src}\n→ {result.dst}")
-        else:
-            self.retry_btn = make_button("Retry", small=True, icon_name="retry", name=f"Retry {os.path.basename(result.src)}")
-            self.retry_btn.clicked.connect(self._retry)
-            lay.addWidget(self.retry_btn)
-            self.setToolTip(f"{result.src}\n{result.message}")
-            self._retry_timer = QTimer(self)
-            self._retry_timer.setSingleShot(True)
-            self._retry_timer.setInterval(3000)
-            self._retry_timer.timeout.connect(lambda: self.retry_btn.setEnabled(True))
-        self.refresh_time()
-
-    def focus_widgets(self) -> list:
-        return [w for w in (self.retry_btn, self.show_btn, self.open_btn) if w is not None]
-
-    def refresh_time(self, now: float | None = None) -> None:
-        r = self.result
-        when = relative_time(r.finished_at, now)
-        self.time_label.setText(when)
-        name = os.path.basename(r.src)
-        self.setAccessibleName(f"Converted {name}, {when}" if r.ok else f"Failed to convert {name}: {r.message}, {when}")
-
-    def _retry(self) -> None:
-        self.retry_btn.setEnabled(False)            # one click per attempt; a failed retry adds a fresh row anyway
-        self._retry_timer.start()
-        self.retry_clicked.emit(self.result.src)
-
-
-# ---- main window ----------------------------------------------------------------------------------------------
 
 class MainWindow(QMainWindow):
     settings_changed = Signal(object)     # Settings; emitted on any user edit (text edits debounced)
@@ -193,7 +46,6 @@ class MainWindow(QMainWindow):
         self._converting: str | None = None
         self._problems = Problems()
         self._converted = 0
-        self._rows: list[ActivityRow] = []
         self._quitting = False
         self._hdrfix_path = ""
         self._open_log_folder: Callable[[], None] = _default_open_log_folder
@@ -219,6 +71,10 @@ class MainWindow(QMainWindow):
         self._update_counter()
         self._refresh_status()
         self._fix_tab_order()
+
+    @property
+    def _rows(self) -> list:
+        return self.activity.rows
 
     # -- construction ---------------------------------------------------------------------------------------
 
@@ -323,40 +179,9 @@ class MainWindow(QMainWindow):
         head.addWidget(self.counter_label)
         col.addLayout(head)
 
-        self.activity_card = QFrame()
-        self.activity_card.setObjectName("card")
-        self._stack = QStackedLayout(self.activity_card)
-        empty = QWidget()
-        el = QVBoxLayout(empty)
-        el.setContentsMargins(24, 16, 24, 16)
-        el.setSpacing(6)
-        el.addStretch(1)
-        self.empty_badge = StatusBadge(48)
-        self.empty_badge.set_state("empty")
-        el.addWidget(self.empty_badge, 0, Qt.AlignmentFlag.AlignHCenter)
-        el.addSpacing(6)
-        empty_title = _label("No conversions yet", "section")
-        empty_title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self.empty_text = _label("", "secondary", wrap=True)
-        self.empty_text.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-        el.addWidget(empty_title)
-        el.addWidget(self.empty_text)
-        el.addStretch(1)
-        self._stack.addWidget(empty)
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setAccessibleName("Recent activity")
-        self._rows_host = QWidget()
-        self._rows_layout = QVBoxLayout(self._rows_host)
-        self._rows_layout.setContentsMargins(8, 8, 8, 8)
-        self._rows_layout.setSpacing(2)
-        self._rows_layout.addStretch(1)
-        self.scroll.setWidget(self._rows_host)
-        self._stack.addWidget(self.scroll)
-        self.activity_card.setMinimumHeight(150)
-        col.addWidget(self.activity_card, 1)
+        self.activity = ActivityList()
+        self.activity.retry_requested.connect(self.retry_requested)
+        col.addWidget(self.activity, 1)
 
         # footer
         foot = QHBoxLayout()
@@ -372,10 +197,7 @@ class MainWindow(QMainWindow):
     def _fix_tab_order(self) -> None:
         """Status -> fields -> activity row actions -> footer (rows are created later, so Qt's default would put them last)."""
         chain = [self.toggle_button, self.in_edit, self.in_browse, self.out_edit, self.out_browse, self.out_reset,
-                 self.keep_choice, self.bin_choice]
-        for row in self._rows:
-            chain += row.focus_widgets()
-        chain += [self.settings_button, self.quit_button]
+                 self.keep_choice, self.bin_choice, *self.activity.focus_widgets(), self.settings_button, self.quit_button]
         for a, b in zip(chain, chain[1:]):
             QWidget.setTabOrder(a, b)
 
@@ -395,7 +217,7 @@ class MainWindow(QMainWindow):
         for w in (self.in_edit, self.out_edit, self.keep_choice, self.bin_choice):
             w.blockSignals(False)
         self.out_reset.setVisible(bool(s.output_dir))
-        self._update_empty_text()
+        self.activity.set_folder(s.input_dir)
 
     def _collect(self) -> Settings:
         return dataclasses.replace(
@@ -413,10 +235,12 @@ class MainWindow(QMainWindow):
         new = self._collect()
         if new == self._settings:
             return
+        if (new.input_dir, new.output_dir) != (self._settings.input_dir, self._settings.output_dir):
+            self._error = ""        # a folder edit makes the old "can't watch" card stale; a failed restart reports anew
         self._settings = new
         self.out_reset.setVisible(bool(new.output_dir))
         self._refresh_status()
-        self._update_empty_text()
+        self.activity.set_folder(new.input_dir)
         self.settings_changed.emit(dataclasses.replace(new))
 
     def _finish_edit(self, edit: QLineEdit) -> None:
@@ -442,7 +266,7 @@ class MainWindow(QMainWindow):
         """The dialog owns only the 'App' settings; keep the folder fields as they are."""
         self._settings = dataclasses.replace(
             self._settings, minimize_to_tray=s.minimize_to_tray, notifications=s.notifications,
-            auto_start=s.auto_start, output_to_log=s.output_to_log)
+            auto_start=s.auto_start, output_to_log=s.output_to_log, tone_preset=s.tone_preset)
         self.settings_changed.emit(dataclasses.replace(self._settings))
 
     # -- public API (app -> window) -------------------------------------------------------------------------
@@ -474,7 +298,12 @@ class MainWindow(QMainWindow):
         self._refresh_status()
 
     def set_problems(self, p: Problems) -> None:
+        old = self._problems
         self._problems = p
+        # The "can't watch" error is stale once the folder/tool problem that stopped the watcher is fixed. Only an
+        # input/tool problem going away counts: those stop the service, so no fresh error can be in flight with it.
+        if (old.input or old.tool) and not (p.input or p.tool):
+            self._error = ""
         for label, edit, text in ((self.in_err, self.in_edit, p.input), (self.out_err, self.out_edit, p.output)):
             label.setText(text)
             label.setVisible(bool(text))
@@ -485,24 +314,9 @@ class MainWindow(QMainWindow):
     def add_activity(self, result: ConversionResult) -> None:
         if result.ok:
             self._converted += 1
-        else:                                       # a retry that fails again replaces its old row instead of stacking
-            for old in [r for r in self._rows if not r.result.ok and r.result.src == result.src]:
-                self._drop_row(old)
-        row = ActivityRow(result)
-        row.retry_clicked.connect(self.retry_requested)
-        self._rows_layout.insertWidget(0, row)
-        self._rows.insert(0, row)
-        while len(self._rows) > MAX_ROWS:
-            self._drop_row(self._rows[-1])
-        self._stack.setCurrentWidget(self.scroll)
+        self.activity.add(result)
         self._update_counter()
         self._fix_tab_order()
-
-    def _drop_row(self, row: ActivityRow) -> None:
-        self._rows.remove(row)
-        self._rows_layout.removeWidget(row)
-        row.hide()
-        row.deleteLater()
 
     def show_and_raise(self) -> None:
         if self.isMinimized():
@@ -514,9 +328,7 @@ class MainWindow(QMainWindow):
             self.windowHandle().requestActivate()
 
     def refresh_times(self) -> None:
-        now = time.time()
-        for row in self._rows:
-            row.refresh_time(now)
+        self.activity.refresh_times()
 
     def open_settings(self) -> None:
         if self._dialog is None:
@@ -530,12 +342,6 @@ class MainWindow(QMainWindow):
 
     def _update_counter(self) -> None:
         self.counter_label.setText(f"{self._converted} converted this session")
-
-    def _update_empty_text(self) -> None:
-        folder = self._settings.input_dir
-        where = f"in {elide_path(folder, 36)}" if folder else "in the watch folder"
-        self.empty_text.setText(f"New .jxr files {where} will appear here.")
-        self.empty_text.setToolTip(folder)
 
     def _derive_state(self) -> tuple[str, str, str, str]:
         """(state, title, subtitle, detail) for the status card."""
