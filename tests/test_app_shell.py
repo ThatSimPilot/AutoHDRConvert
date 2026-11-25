@@ -248,9 +248,9 @@ class TestFatalStartup(AppModuleCase):
 
     def setUp(self):
         tmp = self.enterContext(tempfile.TemporaryDirectory())
-        self.enterContext(mock.patch.dict(os.environ, {"APPDATA": tmp}))
+        self.enterContext(mock.patch.dict(os.environ, {"APPDATA": tmp, "LOCALAPPDATA": os.path.join(tmp, "local")}))
         self.enterContext(mock.patch.object(sys, "stderr", io.StringIO()))
-        self.log_dir = os.path.join(tmp, "AutoHDRConvert")
+        self.log_dir = os.path.join(tmp, "local", "AutoHDRConvert", "logs")   # %LOCALAPPDATA%\AutoHDRConvert\logs
         self.log_file = os.path.join(self.log_dir, "AutoHDRConvert.log")    # "Output to log" is off: nothing logs here
         self.qapplication = self.enterContext(mock.patch.object(self.app, "QApplication"))
         self.box = self.enterContext(mock.patch.object(self.app, "QMessageBox"))
@@ -303,7 +303,7 @@ class TestFatalStartup(AppModuleCase):
         blocker = os.path.join(os.environ["APPDATA"], "blocker")
         with open(blocker, "w"):
             pass
-        os.environ["APPDATA"] = blocker                  # makedirs(blocker/AutoHDRConvert) fails
+        os.environ["LOCALAPPDATA"] = blocker             # makedirs(blocker/AutoHDRConvert) fails; the APPDATA fallback works
         self.assertEqual(self.run_main(build=RuntimeError("still reported")), 1)
         self.box.critical.assert_called_once()
 
@@ -346,7 +346,7 @@ class TestEndToEnd(AppModuleCase):
             p = mock.patch(target, return_value=self.bat)
             p.start()
             self.addCleanup(p.stop)
-        p = mock.patch.dict(os.environ, {"APPDATA": self.appdata})
+        p = mock.patch.dict(os.environ, {"APPDATA": self.appdata, "LOCALAPPDATA": os.path.join(root, "Local")})
         p.start()
         self.addCleanup(p.stop)
         self.addCleanup(setup_logging, False)
@@ -450,7 +450,7 @@ class TestMain(AppModuleCase):
             "raise SystemExit(app.main())",
         ])
         with tempfile.TemporaryDirectory() as tmp:
-            env = dict(os.environ, APPDATA=tmp)
+            env = dict(os.environ, APPDATA=tmp, LOCALAPPDATA=os.path.join(tmp, "Local"))
             r = subprocess.run([sys.executable, "-c", child, ROOT], env=env, capture_output=True, text=True, timeout=60)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertNotIn("Traceback", r.stderr)

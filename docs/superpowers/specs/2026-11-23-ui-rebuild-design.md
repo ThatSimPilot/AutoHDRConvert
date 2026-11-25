@@ -1,5 +1,7 @@
 # Auto HDR-SDR Converter — UI rebuild and code split
 
+> **Update (v2 release):** this is the original rebuild design. Since then: the app ships as one standalone exe (no installer); the settings folder can be moved from Settings (pointer file `config_location.txt` in `%APPDATA%\AutoHDRConvert`); logs default to `%LOCALAPPDATA%\AutoHDRConvert\logs` with a user-chosen override (`Settings.log_dir`); `autohdr/shortcut.py` manages the Start menu shortcut; and the tone presets are tuned hdrfix argument sets (`autohdr/models.py`). The README is the source of truth.
+
 Date: 2026-11-23 · Status: approved to build by the project owner ("spin up agents to complete the UI rebuild … happy to split the code")
 
 ## Intent
@@ -34,7 +36,7 @@ AutoHDRConvert.py          thin entry: from autohdr.app import main; raise Syste
 autohdr/
   __init__.py              __version__ = "2.0.0.dev0"  (placeholder; owner sets at release)
   models.py                shared dataclasses (OWNED BY LEAD — do not edit; report needed changes)
-  paths.py                 app_dir, resource_path, app_data_dir, config_path, log_path, find_hdrfix   [core]
+  paths.py                 app_dir, resource_path, app_data_dir, config_dir, config_path, log_dir, log_path, find_hdrfix   [core]
   config.py                load_settings / save_settings (+ legacy fallback)                          [core]
   logs.py                  setup_logging(output_to_log)                                                [core]
   convert.py               make_output_path, wait_for_file, trash_original, convert_file               [core]
@@ -61,12 +63,12 @@ Events delivered to `on_event` (called from NON-UI threads): `StateChanged(runni
 ### Core API (`[core]`)
 ```python
 # paths.py   (same behaviour as the current AutoHDRConvert.py helpers; APPDATA read at call time)
-app_dir(); resource_path(name); app_data_dir(); config_path(); log_path(); find_hdrfix() -> str | None
+app_dir(); resource_path(name); app_data_dir(); config_dir(); config_path(); log_dir(configured=""); log_path(configured=""); find_hdrfix() -> str | None
 # config.py
 load_settings() -> Settings      # new file, else legacy config.json beside the exe, else defaults; wrong types/unknown keys ignored; corrupt -> defaults; never raises
 save_settings(s: Settings) -> bool
 # logs.py
-setup_logging(output_to_log: bool) -> None   # rotating 1 MB file in %APPDATA%\AutoHDRConvert\AutoHDRConvert.log; no StreamHandler if sys.stderr is None; idempotent
+setup_logging(output_to_log: bool, log_dir: str = "") -> None   # rotating 1 MB file, default %LOCALAPPDATA%\AutoHDRConvert\logs (falls back to %APPDATA%\AutoHDRConvert); no StreamHandler if sys.stderr is None; idempotent
 # convert.py
 make_output_path(src, output_dir) -> str                 # <stem>-sdr.jpg, then -sdr-1.jpg ...
 wait_for_file(path, timeout=10, settle=0.5) -> None

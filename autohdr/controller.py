@@ -108,8 +108,8 @@ class Controller(QObject):
         if self._quitting:           # quit()'s final flush of a pending edit: it saves, nothing else may start
             return
         self._save_timer.start(self.SAVE_DELAY_MS)
-        if settings.output_to_log != previous.output_to_log:
-            self._setup_logging(settings.output_to_log)
+        if (settings.output_to_log, settings.log_dir) != (previous.output_to_log, previous.log_dir):
+            self._setup_logging(settings.output_to_log, settings.log_dir)
         self._service.configure(settings)
         problems = self._validate(settings)
         self._window.set_problems(problems)

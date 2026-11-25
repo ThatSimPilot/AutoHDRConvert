@@ -1,4 +1,6 @@
-"""Tests for autohdr.paths. Run from the repo root:  python -m unittest discover -s tests -v"""
+"""Tests for autohdr.paths. Run from the repo root:  python -m unittest discover -s tests -v
+
+APPDATA and LOCALAPPDATA are always temp dirs here, so the real settings and logs are never touched."""
 import os
 import sys
 import tempfile
@@ -31,17 +33,58 @@ class AppLocationTests(unittest.TestCase):
 
 
 class AppDataTests(unittest.TestCase):
-    def test_paths_follow_appdata_at_call_time(self):
-        with mock.patch.dict(os.environ, {"APPDATA": r"C:\A"}):
-            self.assertEqual(paths.app_data_dir(), os.path.join(r"C:\A", "AutoHDRConvert"))
-            self.assertEqual(paths.config_path(), os.path.join(r"C:\A", "AutoHDRConvert", "config.json"))
-            self.assertEqual(paths.log_path(), os.path.join(r"C:\A", "AutoHDRConvert", "AutoHDRConvert.log"))
-        with mock.patch.dict(os.environ, {"APPDATA": r"C:\B"}):
-            self.assertTrue(paths.config_path().startswith(r"C:\B"))
+    def setUp(self):
+        tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.appdata = os.path.join(tmp, "Roaming")
+        self.local = os.path.join(tmp, "Local")
+        self.enterContext(mock.patch.dict(os.environ, {"APPDATA": self.appdata, "LOCALAPPDATA": self.local}))
+        self.default = os.path.join(self.appdata, "AutoHDRConvert")
+
+    def test_settings_default_to_the_appdata_folder(self):
+        self.assertEqual(paths.app_data_dir(), self.default)
+        self.assertEqual(paths.config_dir(), self.default)
+        self.assertEqual(paths.config_path(), os.path.join(self.default, "config.json"))
+        self.assertEqual(paths.config_location_file(), os.path.join(self.default, "config_location.txt"))
+        self.assertEqual(paths.fallback_log_path(), os.path.join(self.default, "AutoHDRConvert.log"))
+
+    def test_config_dir_reads_the_pointer_file(self):
+        chosen = os.path.join(self.local, "chosen")
+        touch(paths.config_location_file(), f'  "{chosen}"\r\n'.encode())
+        self.assertEqual(paths.config_dir(), chosen)
+        self.assertEqual(paths.config_path(), os.path.join(chosen, "config.json"))
+        self.assertEqual(paths.app_data_dir(), self.default, "the pointer doesn't move the pointer file or the fallback log")
+
+    def test_blank_or_garbage_pointer_falls_back_to_the_default(self):
+        pointer = paths.config_location_file()
+        for content in (b"", b"   \r\n", b'""', b"relative\\folder", b"\xff\xfe\x00garbage"):
+            with self.subTest(content=content):
+                touch(pointer, content)
+                self.assertEqual(paths.config_dir(), self.default)
+                self.assertEqual(paths.config_path(), os.path.join(self.default, "config.json"))
+        os.remove(pointer)
+        os.makedirs(pointer)  # unreadable: a folder where the file should be
+        self.assertEqual(paths.config_dir(), self.default)
 
     def test_blank_appdata_falls_back_to_the_home_folder(self):
         with mock.patch.dict(os.environ, {"APPDATA": ""}):
             self.assertEqual(paths.app_data_dir(), os.path.join(os.path.expanduser("~"), "AutoHDRConvert"))
+
+    def test_default_logs_live_in_localappdata_not_beside_the_exe(self):
+        want = os.path.join(self.local, "AutoHDRConvert", "logs")
+        self.assertEqual(paths.default_log_dir(), want)
+        self.assertEqual(paths.log_dir(), want)
+        self.assertEqual(paths.log_path(), os.path.join(want, "AutoHDRConvert.log"))
+        with mock.patch.object(paths, "app_dir", return_value=os.path.join("C:\\", "apps")):
+            self.assertEqual(paths.log_path(), os.path.join(want, "AutoHDRConvert.log"))
+
+    def test_blank_localappdata_falls_back_to_the_home_folder(self):
+        with mock.patch.dict(os.environ, {"LOCALAPPDATA": ""}):
+            self.assertEqual(paths.default_log_dir(),
+                             os.path.join(os.path.expanduser("~"), "AppData", "Local", "AutoHDRConvert", "logs"))
+
+    def test_a_configured_log_folder_wins_and_is_cleaned(self):
+        self.assertEqual(paths.log_dir(' "D:\\my logs" '), "D:\\my logs")
+        self.assertEqual(paths.log_path("D:\\L"), os.path.join("D:\\L", "AutoHDRConvert.log"))
 
 
 class CleanPathTests(unittest.TestCase):

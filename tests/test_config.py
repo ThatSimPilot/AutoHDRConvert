@@ -8,7 +8,7 @@ from dataclasses import asdict
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from autohdr import config  # noqa: E402
+from autohdr import config, paths  # noqa: E402
 from autohdr.models import Settings  # noqa: E402
 
 LOGGER = "AutoHDRConvert"
@@ -45,7 +45,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.load_settings(), s)
 
     def test_tone_preset_round_trips_and_defaults_to_natural(self):
-        for key in ("natural", "punchy", "bright"):
+        for key in ("natural", "bright"):
             with self.subTest(key=key):
                 self.assertTrue(config.save_settings(Settings(tone_preset=key)))
                 with open(self.new_file, encoding="utf-8") as f:
@@ -131,6 +131,80 @@ class ConfigTests(unittest.TestCase):
         self.assertNotEqual(tmp, dst)
         with open(self.new_file, encoding="utf-8") as f:
             self.assertEqual(json.load(f), asdict(Settings()))
+
+
+class SettingsFolderTests(unittest.TestCase):
+    """set_config_dir: the user picks where config.json lives. Everything happens in temp dirs."""
+
+    def setUp(self):
+        tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.appdata = os.path.join(tmp, "appdata")
+        self.legacy_dir = os.path.join(tmp, "appfolder")
+        self.chosen = os.path.join(tmp, "my settings")
+        os.makedirs(self.legacy_dir)
+        self.default = os.path.join(self.appdata, "AutoHDRConvert")
+        self.default_file = os.path.join(self.default, "config.json")
+        self.pointer = os.path.join(self.default, "config_location.txt")
+        self.enterContext(mock.patch.dict(os.environ, {"APPDATA": self.appdata}))
+        self.enterContext(mock.patch.object(config, "app_dir", return_value=self.legacy_dir))
+
+    def test_config_dir_defaults_to_the_appdata_folder(self):
+        self.assertEqual(paths.config_dir(), self.default)
+        self.assertFalse(os.path.exists(self.pointer))
+
+    def test_set_config_dir_copies_the_config_and_writes_the_pointer(self):
+        config.save_settings(Settings(input_dir="old_in"))
+        self.assertEqual(config.set_config_dir(self.chosen), "")
+        self.assertTrue(os.path.isdir(self.chosen))
+        self.assertTrue(os.path.isfile(os.path.join(self.chosen, "config.json")))
+        with open(self.pointer, encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), os.path.normpath(self.chosen))
+        self.assertEqual(paths.config_dir(), os.path.normpath(self.chosen))
+        self.assertEqual(config.load_settings().input_dir, "old_in")
+        self.assertTrue(os.path.isfile(self.default_file), "the old file stays behind as a backup")
+
+    def test_quoted_pasted_folder_is_cleaned(self):
+        self.assertEqual(config.set_config_dir(f'  "{self.chosen}"  '), "")
+        with open(self.pointer, encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), os.path.normpath(self.chosen))
+
+    def test_existing_config_in_the_new_folder_is_not_overwritten(self):
+        config.save_settings(Settings(input_dir="old_in"))
+        touch(os.path.join(self.chosen, "config.json"), json.dumps(asdict(Settings(input_dir="there"))).encode())
+        self.assertEqual(config.set_config_dir(self.chosen), "")
+        self.assertEqual(config.load_settings().input_dir, "there")
+
+    def test_blank_folder_returns_to_the_default_and_removes_the_pointer(self):
+        config.save_settings(Settings(input_dir="old_in"))
+        self.assertEqual(config.set_config_dir(self.chosen), "")
+        self.assertEqual(config.set_config_dir(""), "")
+        self.assertFalse(os.path.exists(self.pointer))
+        self.assertEqual(paths.config_dir(), self.default)
+        self.assertEqual(config.load_settings().input_dir, "old_in")
+
+    def test_choosing_the_default_folder_removes_the_pointer(self):
+        self.assertEqual(config.set_config_dir(self.chosen), "")
+        self.assertEqual(config.set_config_dir(self.default.upper()), "")
+        self.assertFalse(os.path.exists(self.pointer))
+        self.assertEqual(paths.config_dir(), self.default)
+
+    def test_unusable_folder_returns_an_error_and_changes_nothing(self):
+        config.save_settings(Settings(input_dir="old_in"))
+        blocker = touch(os.path.join(self.legacy_dir, "afile"))   # a folder can't be made under a file
+        for bad in (os.path.join(blocker, "sub"), blocker):
+            with self.subTest(bad=bad):
+                err = config.set_config_dir(bad)
+                self.assertIsInstance(err, str)
+                self.assertTrue(err)
+                self.assertFalse(os.path.exists(self.pointer))
+                self.assertEqual(paths.config_dir(), self.default)
+                self.assertEqual(config.load_settings().input_dir, "old_in")
+
+    def test_never_raises_even_when_the_pointer_cannot_be_written(self):
+        os.makedirs(self.pointer)  # a folder where the pointer file should be
+        with mock.patch.object(config, "config_location_file", return_value=self.pointer):
+            err = config.set_config_dir(self.chosen)
+        self.assertTrue(err)
 
 
 if __name__ == "__main__":

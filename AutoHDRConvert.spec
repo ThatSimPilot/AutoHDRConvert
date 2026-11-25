@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-
+# Single standalone exe: pyinstaller AutoHDRConvert.spec -> dist\AutoHDRConvert.exe
 
 a = Analysis(
     ['AutoHDRConvert.py'],

@@ -1,6 +1,7 @@
 """UI smoke tests (offscreen). Run: .venv\\Scripts\\python.exe -m unittest tests.test_ui -v"""
 import os
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -15,7 +16,7 @@ from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from autohdr.models import TONE_PRESETS, ConversionResult, Problems, Settings  # noqa: E402
-from autohdr.ui import icons, main_window, theme  # noqa: E402
+from autohdr.ui import icons, main_window, settings_dialog, theme  # noqa: E402
 from autohdr.ui.main_window import MainWindow  # noqa: E402
 from autohdr.ui.settings_dialog import SettingsDialog  # noqa: E402
 
@@ -193,8 +194,8 @@ class MainWindowSignals(Base):
         self.assertTrue(got[-1].output_to_log)
         dlg.notify_choices["all"].click()
         self.assertEqual(got[-1].notifications, "all")
-        dlg.tone_choices["punchy"].click()
-        self.assertEqual(got[-1].tone_preset, "punchy")
+        dlg.tone_choices["bright"].click()
+        self.assertEqual(got[-1].tone_preset, "bright")
         self.assertEqual(got[-1].input_dir, "C:/shots")          # folder fields are untouched
         dlg.close()
 
@@ -359,6 +360,26 @@ class StatusAndProblems(Base):
 
 
 class SettingsDialogTests(unittest.TestCase):
+    DEFAULT_DIR = r"C:\Users\me\AppData\Roaming\Auto HDR-SDR Converter"
+
+    def setUp(self):
+        # Nothing here touches the real Start Menu, the real settings folder or PowerShell.
+        self.sc = self._patch("shortcut")
+        self.sc.available.return_value = True
+        self.sc.exists.return_value = False
+        self.sc.create.return_value = ""
+        self.sc.remove.return_value = ""
+        self.cfg = self._patch("config")
+        self.cfg.set_config_dir.return_value = ""
+        self.pth = self._patch("paths")
+        self.pth.config_dir.return_value = self.DEFAULT_DIR
+        self.pth.app_data_dir.return_value = self.DEFAULT_DIR
+
+    def _patch(self, name):
+        p = mock.patch.object(settings_dialog, name)
+        self.addCleanup(p.stop)
+        return p.start()
+
     def dialog(self, settings=None, tray=True, **kw):
         d = SettingsDialog(settings or Settings(), tray, kw.get("path", ""), kw.get("open_log"))
         self.addCleanup(d.deleteLater)
@@ -394,15 +415,15 @@ class SettingsDialogTests(unittest.TestCase):
         self.assertEqual([c.text() for c in d.tone_choices.values()], [label for label, _ in TONE_PRESETS.values()])
         self.assertEqual(list(d.tone_choices), list(TONE_PRESETS))
         d.tone_choices["bright"].click()
-        d.tone_choices["punchy"].click()
-        self.assertEqual([s.tone_preset for s in got], ["bright", "punchy"])
+        d.tone_choices["natural"].click()
+        self.assertEqual([s.tone_preset for s in got], ["bright", "natural"])
 
     def test_set_settings_tone_is_silent_and_unknown_key_is_safe(self):
         d = self.dialog()
         got = []
         d.settings_changed.connect(got.append)
-        d.set_settings(Settings(tone_preset="punchy"))
-        self.assertTrue(d.tone_choices["punchy"].isChecked())
+        d.set_settings(Settings(tone_preset="bright"))
+        self.assertTrue(d.tone_choices["bright"].isChecked())
         d.set_settings(Settings(tone_preset="no-such-preset"))   # falls back to the first preset
         self.assertTrue(d.tone_choices["natural"].isChecked())
         self.assertEqual(got, [])
@@ -420,6 +441,145 @@ class SettingsDialogTests(unittest.TestCase):
         self.assertIn(r"C:\tools\hdrfix.exe", d.hdrfix_label.fullText())
         d.set_hdrfix_path("")
         self.assertIn("wasn't found", d.hdrfix_label.fullText())
+
+    def test_start_menu_switch_starts_from_shortcut_state(self):
+        self.assertFalse(self.dialog().start_menu_switch.isChecked())
+        self.sc.exists.return_value = True
+        self.assertTrue(self.dialog().start_menu_switch.isChecked())
+
+    def test_toggling_shortcut_creates_and_removes(self):
+        d = self.dialog()
+        d.start_menu_switch.click()
+        self.sc.create.assert_called_once()
+        self.assertTrue(d.start_menu_switch.isChecked())
+        self.assertTrue(d.files_note.isHidden())
+        d.start_menu_switch.click()
+        self.sc.remove.assert_called_once()
+        self.assertFalse(d.start_menu_switch.isChecked())
+
+    def test_failed_create_reverts_switch_and_shows_error(self):
+        self.sc.create.return_value = "Access is denied."
+        d = self.dialog()
+        d.start_menu_switch.click()
+        self.assertFalse(d.start_menu_switch.isChecked())
+        self.assertEqual(d.files_note.text(), "Access is denied.")
+        self.assertFalse(d.files_note.isHidden())
+        self.sc.remove.assert_not_called()
+
+    def test_failed_remove_reverts_switch_and_shows_error(self):
+        self.sc.exists.return_value = True
+        self.sc.remove.return_value = "Couldn't remove the shortcut."
+        d = self.dialog()
+        d.start_menu_switch.click()
+        self.assertTrue(d.start_menu_switch.isChecked())
+        self.assertEqual(d.files_note.text(), "Couldn't remove the shortcut.")
+
+    def test_success_clears_an_earlier_error(self):
+        self.sc.create.side_effect = ["Access is denied.", ""]
+        d = self.dialog()
+        d.start_menu_switch.click()
+        self.assertFalse(d.files_note.isHidden())
+        d.start_menu_switch.click()
+        self.assertEqual(d.files_note.text(), "")
+        self.assertTrue(d.files_note.isHidden())
+
+    def test_shortcut_unavailable_disables_switch(self):
+        self.sc.available.return_value = False
+        d = self.dialog()
+        self.assertFalse(d.start_menu_switch.isEnabled())
+        self.assertEqual(d.files_note.text(), "Available in the built app only.")
+        self.assertFalse(d.files_note.isHidden())
+        self.sc.create.assert_not_called()
+
+    def test_shortcut_switch_never_emits_settings_changed(self):
+        d = self.dialog()
+        got = []
+        d.settings_changed.connect(got.append)
+        d.start_menu_switch.click()
+        d.start_menu_switch.click()
+        self.sc.create.return_value = "Access is denied."
+        d.start_menu_switch.click()
+        self.assertEqual(got, [])
+
+    def test_settings_folder_label_marks_default(self):
+        d = self.dialog()
+        self.assertEqual(d.config_dir_label.fullText(), f"Settings folder: {self.DEFAULT_DIR}  (default)")
+        self.assertFalse(d.config_reset_button.isEnabled())
+
+    def test_settings_folder_label_for_custom_folder(self):
+        self.pth.config_dir.return_value = "D:/Settings/AutoHDR"
+        d = self.dialog()
+        self.assertEqual(d.config_dir_label.fullText(), "Settings folder: D:/Settings/AutoHDR")
+        self.assertTrue(d.config_reset_button.isEnabled())
+
+    def test_change_settings_folder_calls_set_config_dir(self):
+        d = self.dialog()
+        with mock.patch.object(settings_dialog.QFileDialog, "getExistingDirectory", return_value="D:/Settings/AutoHDR") as dlg:
+            d.config_change_button.click()
+        self.assertEqual(dlg.call_args.args[2], self.DEFAULT_DIR)     # starts at the current folder
+        self.cfg.set_config_dir.assert_called_once_with(os.path.normpath("D:/Settings/AutoHDR"))
+        self.assertTrue(d.files_note.isHidden())
+
+    def test_cancelled_folder_dialog_changes_nothing(self):
+        d = self.dialog()
+        with mock.patch.object(settings_dialog.QFileDialog, "getExistingDirectory", return_value=""):
+            d.config_change_button.click()
+        self.cfg.set_config_dir.assert_not_called()
+
+    def test_change_settings_folder_failure_shows_error(self):
+        self.cfg.set_config_dir.return_value = "That folder can't be used."
+        d = self.dialog()
+        with mock.patch.object(settings_dialog.QFileDialog, "getExistingDirectory", return_value="D:/Settings"):
+            d.config_change_button.click()
+        self.assertEqual(d.files_note.text(), "That folder can't be used.")
+        self.assertFalse(d.files_note.isHidden())
+
+    def test_use_default_calls_set_config_dir_with_empty(self):
+        self.pth.config_dir.return_value = "D:/Settings/AutoHDR"
+        d = self.dialog()
+        d.config_reset_button.click()
+        self.cfg.set_config_dir.assert_called_once_with("")
+
+    def test_use_default_failure_shows_error(self):
+        self.pth.config_dir.return_value = "D:/Settings/AutoHDR"
+        self.cfg.set_config_dir.return_value = "Can't write there."
+        d = self.dialog()
+        d.config_reset_button.click()
+        self.assertEqual(d.files_note.text(), "Can't write there.")
+
+    def test_successful_folder_change_re_emits_settings_so_they_are_saved_there(self):
+        self.pth.config_dir.return_value = "D:/Settings/AutoHDR"
+        d = self.dialog()
+        got = []
+        d.settings_changed.connect(got.append)
+        d.config_reset_button.click()
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0], d._settings)
+
+    def test_failed_folder_change_does_not_emit_settings(self):
+        self.pth.config_dir.return_value = "D:/Settings/AutoHDR"
+        self.cfg.set_config_dir.return_value = "Can't write there."
+        d = self.dialog()
+        got = []
+        d.settings_changed.connect(got.append)
+        d.config_reset_button.click()
+        self.assertEqual(got, [])
+
+    def test_open_settings_folder_creates_then_opens(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = os.path.join(tmp, "AutoHDR")
+            self.pth.config_dir.return_value = folder
+            d = self.dialog()
+            with mock.patch.object(settings_dialog.os, "startfile", create=True) as start:
+                d.config_open_button.click()
+            self.assertTrue(os.path.isdir(folder))
+            start.assert_called_once_with(folder)
+
+    def test_open_settings_folder_failure_is_shown_not_raised(self):
+        d = self.dialog()
+        with mock.patch.object(settings_dialog.os, "startfile", create=True, side_effect=OSError("nope")):
+            d.config_open_button.click()
+        self.assertEqual(d.files_note.text(), "Couldn't open that folder.")
 
 
 if __name__ == "__main__":

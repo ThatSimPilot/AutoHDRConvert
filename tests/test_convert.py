@@ -11,6 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from autohdr import convert  # noqa: E402
+from autohdr.models import TONE_PRESETS  # noqa: E402
 
 LOGGER = "AutoHDRConvert"
 HDRFIX = r"C:\fake\hdrfix.exe"
@@ -87,7 +88,7 @@ class ConvertFileSuccessTests(ConvertCase):
         self.assertEqual((r.ok, r.src, r.dst, r.message, r.original_removed), (True, src, out, "", False))
         self.assertAlmostEqual(r.finished_at, time.time(), delta=5)
         (call,) = self.popen.call_args_list
-        self.assertEqual(call.args[0], [HDRFIX, src, out])
+        self.assertEqual(call.args[0], [HDRFIX, src, out, *TONE_PRESETS["natural"][1]])
         kw = call.kwargs
         self.assertFalse(kw["shell"])
         self.assertEqual(kw["creationflags"], subprocess.CREATE_NO_WINDOW)
@@ -98,7 +99,7 @@ class ConvertFileSuccessTests(ConvertCase):
         self.trash.assert_not_called()
 
     def test_tone_preset_options_follow_the_two_paths_and_natural_adds_nothing(self):
-        cases = (("natural", []), ("punchy", ["--tone-map", "aces"]), ("bright", ["--exposure", "0.5"]))
+        cases = tuple((key, TONE_PRESETS[key][1]) for key in ("natural", "bright"))
         for key, extra in cases:
             with self.subTest(preset=key):
                 self.popen.reset_mock()
@@ -111,7 +112,7 @@ class ConvertFileSuccessTests(ConvertCase):
         src = self.src()
         r = self.convert(src, tone_preset="no-such-preset")
         self.assertTrue(r.ok)
-        self.assertEqual(self.popen.call_args.args[0], [HDRFIX, src, r.dst])
+        self.assertEqual(self.popen.call_args.args[0], [HDRFIX, src, r.dst, *TONE_PRESETS["natural"][1]])
 
     def test_hdrfix_gets_the_documented_timeout(self):
         self.convert(self.src())

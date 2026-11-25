@@ -1,4 +1,4 @@
-"""Tests for autohdr.logs. APPDATA is a temp dir; handlers are reset in tearDown so no file handle leaks."""
+"""Tests for autohdr.logs. APPDATA and LOCALAPPDATA are temp dirs; handlers are reset in tearDown so no file handle leaks."""
 import io
 import logging
 import os
@@ -17,7 +17,8 @@ LOGGER = "AutoHDRConvert"
 class SetupLoggingTests(unittest.TestCase):
     def setUp(self):
         self.tmp = self.enterContext(tempfile.TemporaryDirectory())
-        self.enterContext(mock.patch.dict(os.environ, {"APPDATA": self.tmp}))
+        self.local = os.path.join(self.tmp, "local")   # stands in for %LOCALAPPDATA%
+        self.enterContext(mock.patch.dict(os.environ, {"APPDATA": self.tmp, "LOCALAPPDATA": self.local}))
         self.enterContext(mock.patch.object(sys, "stderr", io.StringIO()))  # keep the console handler quiet
         self.root = logging.getLogger()
         self.level = self.root.level
@@ -33,11 +34,12 @@ class SetupLoggingTests(unittest.TestCase):
     def file_handlers(self):
         return [h for h in self.root.handlers if isinstance(h, logging.FileHandler)]
 
-    def test_on_adds_one_file_handler_writing_under_appdata(self):
+    def test_on_adds_one_file_handler_writing_to_localappdata_logs(self):
         logs.setup_logging(True)
         (fh,) = self.file_handlers()
         self.assertEqual(os.path.normcase(fh.baseFilename), os.path.normcase(log_path()))
-        self.assertTrue(os.path.normcase(fh.baseFilename).startswith(os.path.normcase(self.tmp)))
+        self.assertEqual(os.path.normcase(fh.baseFilename),
+                         os.path.normcase(os.path.join(self.local, "AutoHDRConvert", "logs", "AutoHDRConvert.log")))
         logs.log.info("hello-log")
         logs.setup_logging(False)  # close before reading
         with open(log_path(), encoding="utf-8") as f:
@@ -62,12 +64,29 @@ class SetupLoggingTests(unittest.TestCase):
         (fh,) = self.file_handlers()
         self.assertEqual((fh.maxBytes, fh.backupCount), (1_000_000, 1))
 
-    def test_unwritable_log_dir_does_not_raise(self):
+    def test_a_configured_folder_is_used(self):
+        folder = os.path.join(self.tmp, "mine")
+        logs.setup_logging(True, folder)
+        (fh,) = self.file_handlers()
+        self.assertEqual(os.path.normcase(fh.baseFilename), os.path.normcase(os.path.join(folder, "AutoHDRConvert.log")))
+        self.assertEqual(os.path.normcase(logs.active_log_folder()), os.path.normcase(folder))
+
+    def test_unwritable_folder_falls_back_to_appdata(self):
+        blocker = os.path.join(self.tmp, "afile")
+        with open(blocker, "wb") as f:
+            f.write(b"x")
+        with self.assertLogs(LOGGER, "ERROR"):
+            logs.setup_logging(True, os.path.join(blocker, "logs"))   # a folder can't be made under a file
+        (fh,) = self.file_handlers()
+        self.assertEqual(os.path.normcase(fh.baseFilename),
+                         os.path.normcase(os.path.join(self.tmp, "AutoHDRConvert", "AutoHDRConvert.log")))
+
+    def test_nothing_writable_does_not_raise(self):
         blocker = os.path.join(self.tmp, "afile")
         with open(blocker, "wb") as f:
             f.write(b"x")
         with mock.patch.dict(os.environ, {"APPDATA": blocker}), self.assertLogs(LOGGER, "ERROR"):
-            logs.setup_logging(True)
+            logs.setup_logging(True, os.path.join(blocker, "logs"))
         self.assertEqual(self.file_handlers(), [])
 
     def test_no_console_handler_when_there_is_no_stderr(self):

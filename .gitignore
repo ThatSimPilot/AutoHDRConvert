@@ -9,14 +9,12 @@ venv/
 build/
 dist/
 
-# Inno Setup output
-InnoInstaller Compile/
-
 # Release archives
 *.zip
 
 # Per-user config and logs (app stores these in %APPDATA%\AutoHDRConvert\)
 /config.json
+/logs/
 *.log
 z_log.txt
 

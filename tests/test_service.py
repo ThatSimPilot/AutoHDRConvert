@@ -13,7 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from autohdr import service  # noqa: E402
-from autohdr.models import ConversionFinished, ConversionStarted, StateChanged  # noqa: E402
+from autohdr.models import TONE_PRESETS, ConversionFinished, ConversionStarted, StateChanged  # noqa: E402
 from autohdr.paths import HDRFIX_MISSING  # noqa: E402
 from tests.service_support import (HDRFIX, LOGGER, ServiceCase, created, moved, touch,  # noqa: E402
                                    wait_for)
@@ -35,7 +35,7 @@ class EventFlowTests(ServiceCase):
         self.assertEqual((r.ok, r.src, r.message, r.original_removed), (True, src, "", False))
         self.assertEqual(r.dst, os.path.join(self.out, "shot-sdr.jpg"))
         self.assertTrue(os.path.exists(src))
-        self.assertEqual(self.runs, [[HDRFIX, src, r.dst]])
+        self.assertEqual(self.runs, [[HDRFIX, src, r.dst, *TONE_PRESETS["natural"][1]]])
 
     def test_events_come_from_the_worker_not_the_caller(self):
         threads = []

@@ -15,8 +15,8 @@ from autohdr import __version__
 from autohdr.config import load_settings, save_settings
 from autohdr.controller import TITLE, Controller
 from autohdr.instance import SingleInstance
-from autohdr.logs import setup_logging
-from autohdr.paths import APP_NAME, app_data_dir, find_hdrfix, log_path
+from autohdr.logs import active_log_folder, active_log_path, setup_logging
+from autohdr.paths import APP_NAME, app_data_dir, fallback_log_path, find_hdrfix
 from autohdr.service import ConversionService, validate_settings
 from autohdr.ui import icons, theme
 from autohdr.ui.main_window import MainWindow
@@ -41,8 +41,13 @@ def open_folder(path: str) -> None:
 
 
 def open_log_folder() -> None:
-    os.makedirs(app_data_dir(), exist_ok=True)   # the folder only exists once something was saved or logged
-    open_folder(app_data_dir())
+    folder = active_log_folder()
+    try:
+        os.makedirs(folder, exist_ok=True)   # the folder only exists once something was logged
+    except OSError:
+        folder = app_data_dir()
+        os.makedirs(folder, exist_ok=True)
+    open_folder(folder)
 
 
 def _excepthook(exc_type, exc, tb) -> None:
@@ -79,7 +84,7 @@ def install_hooks() -> None:
 def build() -> SimpleNamespace:
     """Create and wire the real objects. Needs a QApplication; does not show anything or start watching."""
     settings = load_settings()
-    setup_logging(settings.output_to_log)   # first thing after load, so everything below can log
+    setup_logging(settings.output_to_log, settings.log_dir)   # first thing after load, so everything below can log
     tray = Tray(running=False)
     window = MainWindow(settings, tray.available())
     window.set_hdrfix_path(find_hdrfix() or "")
@@ -98,18 +103,22 @@ def _report_fatal(exc: BaseException) -> None:
     """Startup failed before there was a window. The windowed build has no console and the log file may be off,
     so append the traceback to the log file directly and tell the user. Never raises."""
     text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    try:
-        os.makedirs(app_data_dir(), exist_ok=True)
-        with open(log_path(), "a", encoding="utf-8") as f:
-            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - CRITICAL - Fatal error during startup\n{text}")
-    except Exception:
-        pass
+    where = active_log_path()
+    for path in dict.fromkeys((where, fallback_log_path())):   # the install folder may not be writable
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - CRITICAL - Fatal error during startup\n{text}")
+            where = path
+            break
+        except Exception:
+            continue
     try:
         if sys.stderr is not None:
             sys.stderr.write(text)
     except Exception:
         pass
-    message = f"{TITLE} couldn't start.\n\n{type(exc).__name__}: {exc}\n\nDetails: {log_path()}"
+    message = f"{TITLE} couldn't start.\n\n{type(exc).__name__}: {exc}\n\nDetails: {where}"
     try:
         if QApplication.instance() is not None:
             QMessageBox.critical(None, TITLE, message)

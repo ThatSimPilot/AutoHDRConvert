@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QButtonGroup, QFileDialog, QFrame, QGridLayout, Q
                                QVBoxLayout, QWidget)
 
 from autohdr.models import ConversionResult, Problems, Settings
-from autohdr.paths import clean_path
+from autohdr.paths import app_data_dir, clean_path
 
 from . import icons, theme
 from .activity import ActivityList, make_elided as _elided, make_label as _label
@@ -22,7 +22,7 @@ TICK_MS = 30_000
 
 
 def _default_open_log_folder() -> None:
-    folder = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "AutoHDRConvert")
+    folder = app_data_dir()
     try:
         os.makedirs(folder, exist_ok=True)
         os.startfile(folder)
@@ -266,7 +266,7 @@ class MainWindow(QMainWindow):
         """The dialog owns only the 'App' settings; keep the folder fields as they are."""
         self._settings = dataclasses.replace(
             self._settings, minimize_to_tray=s.minimize_to_tray, notifications=s.notifications,
-            auto_start=s.auto_start, output_to_log=s.output_to_log, tone_preset=s.tone_preset)
+            auto_start=s.auto_start, output_to_log=s.output_to_log, log_dir=s.log_dir, tone_preset=s.tone_preset)
         self.settings_changed.emit(dataclasses.replace(self._settings))
 
     # -- public API (app -> window) -------------------------------------------------------------------------

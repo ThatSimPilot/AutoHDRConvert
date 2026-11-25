@@ -11,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from autohdr import convert  # noqa: E402
-from autohdr.models import ConversionFinished, StateChanged  # noqa: E402
+from autohdr.models import TONE_PRESETS, ConversionFinished, StateChanged  # noqa: E402
 from autohdr.paths import HDRFIX_MISSING  # noqa: E402
 from tests.service_support import (LOGGER, FakeObserver, FakeProc, ServiceCase, created, moved,  # noqa: E402
                                    touch)
@@ -159,8 +159,8 @@ class ConfigureTests(ServiceCase):
         svc = self.make()  # starts as natural
         svc.start()
         h = self.observers[0].handler
-        expected = [["--tone-map", "aces"], ["--exposure", "0.5"], []]
-        for n, (preset, extra) in enumerate(zip(("punchy", "bright", "natural"), expected)):
+        expected = [TONE_PRESETS[key][1] for key in ("bright", "natural", "bright")]
+        for n, (preset, extra) in enumerate(zip(("bright", "natural", "bright"), expected)):
             svc.configure(self.settings(tone_preset=preset))
             h.on_created(created(self.src(f"{n}.jxr")))
             self.wait_finished(n + 1)

@@ -133,7 +133,7 @@ class ControllerCase(unittest.TestCase):
         c = Controller(
             self.service, self.window, self.tray, self.settings,
             save_settings=lambda s: (self.saved.append(s), self.calls.append(("save", s)))[0],
-            setup_logging=lambda flag: self.logging_calls.append(flag),
+            setup_logging=lambda flag, log_dir="": self.logging_calls.append(flag),
             validate_settings=lambda s: (self.calls.append(("validate", s)), self.problems)[1],
             open_folder=self.opened.append if open_folder else None,
         )

@@ -1,11 +1,14 @@
-"""Settings dialog: close behaviour, notifications, start-up/log options and the About block."""
+"""Settings dialog: close behaviour, notifications, start-up/log options, files and shortcut, and the About block."""
 import dataclasses
+import os
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QButtonGroup, QDialog, QFrame, QHBoxLayout, QLabel, QVBoxLayout
+from PySide6.QtWidgets import QButtonGroup, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
+from autohdr import config, paths, shortcut
 from autohdr.models import TONE_PRESETS, Settings
+from autohdr.paths import log_dir
 
 from .icons import Choice, ElidedLabel, Switch, make_button
 
@@ -109,11 +112,47 @@ class SettingsDialog(QDialog):
         lay.addWidget(self.auto_start)
         _divider(lay)
         lay.addWidget(self.log_switch)
+        self.log_dir_label = ElidedLabel("", Qt.TextElideMode.ElideMiddle)
+        self.log_dir_label.setProperty("role", "secondary")
+        self.log_dir_label.setContentsMargins(10, 4, 8, 4)
+        lay.addWidget(self.log_dir_label)
         row = QHBoxLayout()
         row.setContentsMargins(10, 0, 8, 6)
         self.log_button = make_button("Open log folder", small=True, name="Open log folder")
         self.log_button.clicked.connect(self._on_open_log)
-        row.addWidget(self.log_button)
+        self.log_change_button = make_button("Change…", small=True, name="Change log folder")
+        self.log_change_button.clicked.connect(self._on_change_log_dir)
+        self.log_reset_button = make_button("Use default", small=True, name="Use default log folder")
+        self.log_reset_button.clicked.connect(self._on_reset_log_dir)
+        for b in (self.log_button, self.log_change_button, self.log_reset_button):
+            row.addWidget(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+
+        col.addSpacing(8)
+        lay = _card(col, "Files and shortcut")
+        self.start_menu_switch = Switch("Start menu shortcut")
+        self.start_menu_switch.setChecked(shortcut.exists())
+        lay.addWidget(self.start_menu_switch)
+        self.files_note = _label("", "caption", wrap=True)
+        self.files_note.setContentsMargins(10, 0, 8, 4)
+        self.files_note.hide()
+        lay.addWidget(self.files_note)
+        _divider(lay)
+        self.config_dir_label = ElidedLabel("", Qt.TextElideMode.ElideMiddle)
+        self.config_dir_label.setProperty("role", "secondary")
+        self.config_dir_label.setContentsMargins(10, 4, 8, 4)
+        lay.addWidget(self.config_dir_label)
+        row = QHBoxLayout()
+        row.setContentsMargins(10, 0, 8, 6)
+        self.config_open_button = make_button("Open settings folder", small=True, name="Open settings folder")
+        self.config_open_button.clicked.connect(self._on_open_config_dir)
+        self.config_change_button = make_button("Change…", small=True, name="Change settings folder")
+        self.config_change_button.clicked.connect(self._on_change_config_dir)
+        self.config_reset_button = make_button("Use default", small=True, name="Use default settings folder")
+        self.config_reset_button.clicked.connect(self._on_reset_config_dir)
+        for b in (self.config_open_button, self.config_change_button, self.config_reset_button):
+            row.addWidget(b)
         row.addStretch(1)
         lay.addLayout(row)
 
@@ -147,6 +186,11 @@ class SettingsDialog(QDialog):
                           *self.tone_choices.values(), self.auto_start, self.log_switch)
         for c in self._controls:
             c.toggled.connect(self._edited)
+        self.start_menu_switch.toggled.connect(self._on_start_menu)
+        if not shortcut.available():
+            self.start_menu_switch.setEnabled(False)
+            self._show_note("Available in the built app only.", error=False)
+        self._show_config_dir()
         self.set_hdrfix_path(hdrfix_path)
         self.set_settings(settings)
 
@@ -164,6 +208,7 @@ class SettingsDialog(QDialog):
         self.tone_choices.get(s.tone_preset, next(iter(self.tone_choices.values()))).setChecked(True)
         self.auto_start.setChecked(s.auto_start)
         self.log_switch.setChecked(s.output_to_log)
+        self._show_log_dir(s.log_dir)
         for w in self._controls:
             w.blockSignals(False)
             w.update()
@@ -198,9 +243,82 @@ class SettingsDialog(QDialog):
             self._settings = new
             self.settings_changed.emit(dataclasses.replace(new))
 
+    def _show_log_dir(self, configured: str) -> None:
+        folder = log_dir(configured)
+        self.log_dir_label.setFullText(f"Log folder: {folder}" + ("" if configured else "  (default)"))
+        self.log_dir_label.setToolTip(folder)
+        self.log_reset_button.setEnabled(bool(configured))
+
+    def _set_log_dir(self, configured: str) -> None:
+        if configured == self._settings.log_dir:
+            return
+        self._settings = dataclasses.replace(self._settings, log_dir=configured)
+        self._show_log_dir(configured)
+        self.settings_changed.emit(dataclasses.replace(self._settings))
+
+    def _on_change_log_dir(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Choose a log folder", log_dir(self._settings.log_dir))
+        if folder:
+            self._set_log_dir(os.path.normpath(folder))
+
+    def _on_reset_log_dir(self) -> None:
+        self._set_log_dir("")
+
     def _on_open_log(self) -> None:
         if self._open_log_folder:
             try:
                 self._open_log_folder()
             except Exception:
                 pass
+
+    def _show_note(self, text: str, error: bool = True) -> None:
+        self.files_note.setText(text)
+        self.files_note.setProperty("role", "error" if error else "caption")
+        self.files_note.style().unpolish(self.files_note)
+        self.files_note.style().polish(self.files_note)
+        self.files_note.setVisible(bool(text))
+
+    def _on_start_menu(self, checked: bool) -> None:
+        err = shortcut.create() if checked else shortcut.remove()
+        if err:
+            self.start_menu_switch.blockSignals(True)
+            self.start_menu_switch.setChecked(not checked)
+            self.start_menu_switch.blockSignals(False)
+            self.start_menu_switch.update()
+            self._show_note(err)
+        else:
+            self._show_note("")
+
+    def _show_config_dir(self) -> None:
+        folder = paths.config_dir()
+        is_default = os.path.normpath(folder).lower() == os.path.normpath(paths.app_data_dir()).lower()
+        self.config_dir_label.setFullText(f"Settings folder: {folder}" + ("  (default)" if is_default else ""))
+        self.config_dir_label.setToolTip(folder)
+        self.config_reset_button.setEnabled(not is_default)
+
+    def _on_open_config_dir(self) -> None:
+        folder = paths.config_dir()
+        try:
+            os.makedirs(folder, exist_ok=True)
+            os.startfile(folder)
+        except Exception:
+            self._show_note("Couldn't open that folder.")
+
+    def _apply_config_dir(self, folder: str) -> None:
+        err = config.set_config_dir(folder)
+        if err:
+            self._show_note(err)
+        else:
+            self._show_note("")
+            self._show_config_dir()
+            # The app only saves on a change, and the new folder may hold an older config: re-emit the current
+            # settings so they are written to the new location now rather than lost on the next start.
+            self.settings_changed.emit(dataclasses.replace(self._settings))
+
+    def _on_change_config_dir(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Choose a settings folder", paths.config_dir())
+        if folder:
+            self._apply_config_dir(os.path.normpath(folder))
+
+    def _on_reset_config_dir(self) -> None:
+        self._apply_config_dir("")
