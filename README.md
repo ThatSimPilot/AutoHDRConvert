@@ -16,6 +16,8 @@ The same HDR screenshot converted by v1 (HDRFix defaults) and by v2 (tuned tone 
 
 v2 is tuned against the original HDR data so that colour, brightness and saturation stay as close to the HDR image as an SDR file allows (see [Tone presets](#tone-presets)).
 
+See the [changelog](CHANGELOG.md) for everything that changed in v2.
+
 ## Install and use
 
 1. Download `AutoHDRConvert.exe` from https://github.com/ThatSimPilot/Auto-HDR-SDR-Converter/releases. It is a single standalone file with nothing to install.
